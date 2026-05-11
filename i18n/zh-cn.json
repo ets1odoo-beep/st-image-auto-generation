@@ -1,0 +1,12 @@
+{
+    "Image Auto Generation": "自动生成图片",
+    "Insert In Current Message": "插入当前消息",
+    "Create New Message": " 创建新消息",
+    "Image Insert Type": "图片插入类型",
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "Enable Prompt Injection": "启用提示注入",
+    "Prompt Template": "提示模板",
+    "Regex": "正则表达式",
+    "Inline Replace Mode": "行内替换模式"
+}

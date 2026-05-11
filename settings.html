@@ -1,0 +1,195 @@
+<div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+        <b data-i18n="Image Auto Generation">Image Auto Generation</b>
+        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content">
+        <style>
+            #image_auto_generation_container .image-auto-help {
+                opacity: 0.72;
+                font-size: 0.86em;
+                line-height: 1.35;
+                margin: 2px 0 8px;
+            }
+            #image_auto_generation_container .image-auto-button-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin: 6px 0 10px;
+            }
+            #image_auto_generation_container .image-auto-compact-input {
+                width: 86px;
+            }
+        </style>
+
+        <div class="flex-container flexnowrap">
+            <label for="image_generation_insert_type" class="flex1" data-i18n="Image Insert Type">Image Insert Type</label>
+            <select id="image_generation_insert_type" class="text_pole widthNatural margin0">
+                <option data-i18n="Insert In Current Message" value="inline">Insert In Current Message</option>
+                <option data-i18n="Inline Replace Mode" value="replace">Inline Replace Mode</option>
+                <option data-i18n="Create New Message" value="new">Create New Message</option>
+                <option data-i18n="Disable" value="disabled">Disable</option>
+            </select>
+        </div>
+        <div class="image-auto-help">
+            Replace mode swaps each &lt;pic&gt; tag for a markdown image inside the same AI message. Insert mode adds images as message media. New message uses SillyTavern image generation's normal separate message behavior. Disabled turns detection off.
+        </div>
+
+        <div class="flex-container flexnowrap">
+            <label class="checkbox_label" for="prompt_injection_enabled">
+                <span data-i18n="Enable Prompt Injection">Enable Prompt Injection</span>
+                <input type="checkbox" id="prompt_injection_enabled" class="checkbox">
+            </label>
+        </div>
+        <div class="image-auto-help">
+            Prompt injection tells the AI to write &lt;pic prompt="..." type="..."&gt; tags. Keep it off if your preset, character, or Megumin already emits pic tags.
+        </div>
+
+        <div>
+            <div><label for="prompt_injection_text" class="flex1" data-i18n="Prompt Template">Prompt Template</label></div>
+            <textarea id="prompt_injection_text" class="text_pole textarea_compact" rows="4" placeholder="Prompt that instructs the AI to generate image tags"></textarea>
+            <div class="image-auto-help">
+                This text is inserted into the model prompt when Prompt Injection is enabled. It should explain when to emit &lt;pic&gt; tags and which type names are allowed.
+            </div>
+            <div class="image-auto-button-row">
+                <button type="button" id="image_generation_reset_prompt" class="menu_button">Reset Prompt Template</button>
+            </div>
+        </div>
+
+        <div>
+            <div><label for="prompt_injection_regex" class="flex1" data-i18n="Regex">Regex</label></div>
+            <textarea id="prompt_injection_regex" class="text_pole textarea_compact" rows="2" placeholder="Regex used to find pic tags"></textarea>
+            <div class="image-auto-help">
+                This finds image tags in AI messages. Capture group 1 must be the image prompt. The default matches single quotes, double quotes, multiline prompts, and self-closing tags.
+            </div>
+            <div class="image-auto-button-row">
+                <button type="button" id="image_generation_test_regex" class="menu_button">Test Regex</button>
+                <button type="button" id="image_generation_reset_regex" class="menu_button">Reset Regex</button>
+            </div>
+        </div>
+
+        <div class="flex-container flexnowrap">
+            <label for="prompt_injection_position" class="flex1" data-i18n="Position">Position</label>
+            <select id="prompt_injection_position" class="text_pole widthNatural margin0">
+                <option value="deep_system" data-i18n="at Depth System">@D system</option>
+                <option value="deep_user" data-i18n="at Depth User">@D user</option>
+                <option value="deep_assistant" data-i18n="at Depth AI">@D assistant</option>
+            </select>
+        </div>
+        <div class="image-auto-help">
+            Position chooses the role used for injected instructions. System is usually strongest. User or assistant can be used if a model reacts poorly to extra system text.
+        </div>
+
+        <div class="flex-container flexnowrap">
+            <label for="prompt_injection_depth" class="flex1" data-i18n="Depth">Depth</label>
+            <input id="prompt_injection_depth" class="text_pole widthUnset image-auto-compact-input" type="number" min="0" max="100">
+        </div>
+        <div class="image-auto-help">
+            Depth controls where the injected prompt is placed in the model input. 0 means near the end, which is easiest and usually best.
+        </div>
+
+        <hr style="margin: 8px 0; opacity: 0.3;">
+
+        <div class="flex-container flexnowrap">
+            <label for="default_image_type" class="flex1">Default Type (fallback)</label>
+            <select id="default_image_type" class="text_pole widthNatural margin0">
+                <option value="portrait">portrait</option>
+                <option value="landscape">landscape</option>
+                <option value="closeup">closeup</option>
+                <option value="scene">scene</option>
+                <option value="square">square</option>
+            </select>
+        </div>
+        <div class="image-auto-help">
+            Used when the AI writes a &lt;pic&gt; tag without a valid type. Portrait is good for characters, scene is good for wider action.
+        </div>
+
+        <div class="flex-container flexnowrap">
+            <label for="image_generation_queue_concurrency" class="flex1">Queue Concurrency</label>
+            <input id="image_generation_queue_concurrency" class="text_pole widthUnset image-auto-compact-input" type="number" min="1" max="4" step="1">
+        </div>
+        <div class="image-auto-help">
+            How many images may generate at the same time. 1 is safest for ComfyUI and avoids model unload/reload thrashing. Higher can be faster but heavier.
+        </div>
+
+        <div class="flex-container flexnowrap">
+            <label for="image_generation_delay" class="flex1">Generation Delay (ms)</label>
+            <input id="image_generation_delay" class="text_pole widthUnset image-auto-compact-input" type="number" min="0" max="30000" step="250">
+        </div>
+        <div class="image-auto-help">
+            Wait this long after the AI message completes before the final image insert/replace pass. 0 is normal.
+        </div>
+
+        <label class="checkbox_label" for="image_generation_skip_streaming">
+            <span>Skip Streaming Pre-generation</span>
+            <input type="checkbox" id="image_generation_skip_streaming" class="checkbox">
+        </label>
+        <div class="image-auto-help">
+            Off means generation can start as soon as a complete &lt;pic&gt; tag appears while the AI is streaming. On waits until the full message is done.
+        </div>
+
+        <label class="checkbox_label" for="image_generation_debug">
+            <span>Debug Logs</span>
+            <input type="checkbox" id="image_generation_debug" class="checkbox">
+        </label>
+        <div class="image-auto-help">
+            Enables extra browser console logs for troubleshooting. Leave off for normal use.
+        </div>
+
+        <hr style="margin: 8px 0; opacity: 0.3;">
+
+        <div style="margin-bottom: 4px;">
+            <label style="font-size: 0.9em; opacity: 0.8;">Resolution Presets <span style="opacity:0.6;">(500k px or less recommended)</span></label>
+            <div class="image-auto-help">
+                Width and height control image shape and VRAM use. Higher pixel counts are slower and heavier. Red pixel counts are above the recommended budget but still allowed.
+            </div>
+            <div class="image-auto-button-row">
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="low_vram">Low VRAM</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="balanced">Balanced</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="quality">Quality</button>
+            </div>
+            <table id="resolution_presets_table" style="width:100%; border-collapse:collapse; margin-top:4px; font-size:0.9em;">
+                <thead>
+                    <tr style="opacity:0.6; text-align:left;">
+                        <th style="padding:2px 4px;">Type</th>
+                        <th style="padding:2px 4px;">Width</th>
+                        <th style="padding:2px 4px;">Height</th>
+                        <th style="padding:2px 4px;">Pixels</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr data-type="portrait">
+                        <td style="padding:2px 4px;">portrait</td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="768"></td>
+                        <td style="padding:2px 4px;" class="preset-pixels">393,216</td>
+                    </tr>
+                    <tr data-type="landscape">
+                        <td style="padding:2px 4px;">landscape</td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="768"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;" class="preset-pixels">393,216</td>
+                    </tr>
+                    <tr data-type="closeup">
+                        <td style="padding:2px 4px;">closeup</td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="640"></td>
+                        <td style="padding:2px 4px;" class="preset-pixels">327,680</td>
+                    </tr>
+                    <tr data-type="scene">
+                        <td style="padding:2px 4px;">scene</td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="768"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="448"></td>
+                        <td style="padding:2px 4px;" class="preset-pixels">344,064</td>
+                    </tr>
+                    <tr data-type="square">
+                        <td style="padding:2px 4px;">square</td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;" class="preset-pixels">262,144</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>

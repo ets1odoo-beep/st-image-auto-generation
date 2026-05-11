@@ -1,0 +1,15 @@
+{
+    "display_name": "Image Auto Generation",
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "author": "knav0",
+    "version": "1.1.0",
+    "homePage": "https://github.com/ets1odoo-beep/st-image-auto-generation",
+    "originalAuthor": "wickedcode01",
+    "basedOn": "https://github.com/wickedcode01/st-image-auto-generation",
+    "auto_update": true,
+    "i18n": {
+        "zh-cn": "i18n/zh-cn.json"
+    }
+}
