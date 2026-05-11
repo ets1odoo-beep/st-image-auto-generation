@@ -139,14 +139,17 @@
         <hr style="margin: 8px 0; opacity: 0.3;">
 
         <div style="margin-bottom: 4px;">
-            <label style="font-size: 0.9em; opacity: 0.8;">Resolution Presets <span style="opacity:0.6;">(500k px or less recommended)</span></label>
+            <label style="font-size: 0.9em; opacity: 0.8;">Resolution Presets <span style="opacity:0.6;">(manual values up to 2048 px per side)</span></label>
             <div class="image-auto-help">
-                Width and height control image shape and VRAM use. Higher pixel counts are slower and heavier. Red pixel counts are above the recommended budget but still allowed.
+                Width and height control image shape and VRAM use. Low VRAM through Quality are safer defaults; HD 1MP, Ultra 1.5MP, and Max 2MP are heavier templates for stronger GPUs/backends. Red pixel counts are above the 500k recommended budget but still allowed.
             </div>
             <div class="image-auto-button-row">
                 <button type="button" class="menu_button image-generation-resolution-profile" data-profile="low_vram">Low VRAM</button>
                 <button type="button" class="menu_button image-generation-resolution-profile" data-profile="balanced">Balanced</button>
                 <button type="button" class="menu_button image-generation-resolution-profile" data-profile="quality">Quality</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="hd_1mp">HD 1MP</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="ultra_1_5mp">Ultra 1.5MP</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="max_2mp">Max 2MP</button>
             </div>
             <table id="resolution_presets_table" style="width:100%; border-collapse:collapse; margin-top:4px; font-size:0.9em;">
                 <thead>

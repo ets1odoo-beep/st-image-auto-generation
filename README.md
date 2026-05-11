@@ -27,7 +27,7 @@ This extension watches AI messages for `<pic prompt="...">` tags, sends the prom
 - Optional streaming pre-generation.
 - Optional prompt injection for presets that do not already emit `<pic>` tags.
 - Regex test and reset buttons.
-- Low VRAM, Balanced, and Quality resolution profile buttons.
+- Low VRAM, Balanced, Quality, HD 1MP, Ultra 1.5MP, and Max 2MP resolution profile buttons.
 - Stores prompt/type/variant metadata for compatibility with inline image viewer workflows.
 - Cleaner settings UI with help text for each option.
 
@@ -129,6 +129,17 @@ When off, generation can begin as soon as a full `<pic>` tag appears during stre
 **Debug Logs**
 
 Enables extra browser console logs for troubleshooting.
+
+**Resolution Profiles**
+
+- **Low VRAM**: smallest default set, safest for ComfyUI and slower GPUs.
+- **Balanced**: original moderate defaults.
+- **Quality**: larger sub-1MP templates for better detail.
+- **HD 1MP**: around 1 megapixel per image type.
+- **Ultra 1.5MP**: around 1.5 megapixels per image type.
+- **Max 2MP**: close to 2 megapixels while staying under the 2048 px per-side UI limit.
+
+Higher profiles can improve detail but cost more VRAM and generation time. The extension warns above 500k pixels but does not block custom values.
 
 ## Prompt Injection Example
 

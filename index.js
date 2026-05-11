@@ -89,6 +89,27 @@ const RESOLUTION_PROFILES = {
         scene:     { width: 960, height: 560 },
         square:    { width: 768, height: 768 },
     },
+    hd_1mp: {
+        portrait:  { width: 832, height: 1216 },
+        landscape: { width: 1216, height: 832 },
+        closeup:   { width: 896, height: 1152 },
+        scene:     { width: 1344, height: 768 },
+        square:    { width: 1024, height: 1024 },
+    },
+    ultra_1_5mp: {
+        portrait:  { width: 1024, height: 1536 },
+        landscape: { width: 1536, height: 1024 },
+        closeup:   { width: 1088, height: 1408 },
+        scene:     { width: 1664, height: 896 },
+        square:    { width: 1216, height: 1216 },
+    },
+    max_2mp: {
+        portrait:  { width: 1152, height: 1728 },
+        landscape: { width: 1728, height: 1152 },
+        closeup:   { width: 1280, height: 1536 },
+        scene:     { width: 1920, height: 1024 },
+        square:    { width: 1408, height: 1408 },
+    },
 };
 
 function debugLog(...args) {
