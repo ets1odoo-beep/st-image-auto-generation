@@ -13,6 +13,7 @@ import {
 import { appendMediaToMessage } from '../../../../script.js';
 import { regexFromString } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { DEFAULT_PROMPT } from './default-prompt.js';
 
 // 扩展名称和路径
 const extensionName = 'st-image-auto-generation';
@@ -58,13 +59,10 @@ const defaultSettings = {
     },
     promptInjection: {
         enabled: true,
-        prompt: `<image_generation>
-You must insert a <pic prompt="example prompt" type="TYPE"> at end of the reply. Prompts are used for stable diffusion image generation, based on the plot and character to output appropriate prompts to generate captivating images.
-TYPE must be exactly one of: portrait (tall character/figure shot, 2:3 ratio), landscape (wide environment or setting, 3:2 ratio), closeup (face or bust only, 4:5 ratio), scene (wide action or group shot, ~17:10 ratio), square (default fallback, 1:1 ratio).
-</image_generation>`,
+        prompt: DEFAULT_PROMPT,
         regex: '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*\\/?>/g',
         position: 'deep_system', // deep_system, deep_user, deep_assistant
-        depth: 0, // 0表示添加到末尾，>0表示从末尾往前数第几个位置
+        depth: 0, // 0 = TOP priority (prepend to start of prompt); >0 = N from end
     },
     queueConcurrency: 1,
     generationDelayMs: 0,
@@ -573,19 +571,19 @@ eventSource.on(
                 `[${extensionName}] 提示词内容: ${prompt.substring(0, 50)}...`,
             );
 
-            // 根据depth参数决定插入位置
+            // depth=0 = TOP priority: prepend to start of the assembled prompt
+            // (matches RPG HUD / FF4 VIR setExtensionPrompt position=0, depth=0)
+            // depth>0 = N positions from end (legacy "deep injection" behavior)
             if (depth === 0) {
-                // 添加到末尾
-                eventData.chat.push({ role: role, content: prompt });
-                debugLog(`[${extensionName}] 提示词已添加到聊天末尾`);
+                eventData.chat.unshift({ role: role, content: prompt });
+                debugLog(`[${extensionName}] prompt prepended at top (depth=0, top priority)`);
             } else {
-                // 从末尾向前插入
                 eventData.chat.splice(-depth, 0, {
                     role: role,
                     content: prompt,
                 });
                 debugLog(
-                    `[${extensionName}] 提示词已插入到聊天中，从末尾往前第 ${depth} 个位置`,
+                    `[${extensionName}] prompt inserted ${depth} from end`,
                 );
             }
         } catch (error) {
