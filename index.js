@@ -62,7 +62,7 @@ const defaultSettings = {
         prompt: DEFAULT_PROMPT,
         regex: '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*\\/?>/g',
         position: 'deep_system', // deep_system, deep_user, deep_assistant
-        depth: 0, // 0 = TOP priority (prepend to start of prompt); >0 = N from end
+        depth: 0, // 0 = append at end (safe; after preset). >0 = N from end.
     },
     queueConcurrency: 1,
     generationDelayMs: 0,
@@ -331,12 +331,14 @@ async function createSettings(settingsHtml) {
         extension_settings[extensionName].promptInjection.enabled =
             $(this).prop('checked');
         saveSettingsDebounced();
+        refreshImagePromptInjection();
     });
 
     $('#prompt_injection_text').on('input', function () {
         extension_settings[extensionName].promptInjection.prompt =
             $(this).val();
         saveSettingsDebounced();
+        refreshImagePromptInjection();
     });
 
     $('#prompt_injection_regex').on('input', function () {
@@ -414,6 +416,7 @@ async function createSettings(settingsHtml) {
         extension_settings[extensionName].promptInjection.prompt = defaultSettings.promptInjection.prompt;
         $('#prompt_injection_text').val(defaultSettings.promptInjection.prompt);
         saveSettingsDebounced();
+        refreshImagePromptInjection();
         toastr.info('Prompt template reset to default.');
     });
 
@@ -542,56 +545,43 @@ function getMesRole() {
     }
 }
 
-// 监听CHAT_COMPLETION_PROMPT_READY事件以注入提示词
-eventSource.on(
-    event_types.CHAT_COMPLETION_PROMPT_READY,
-    async function (eventData) {
-        try {
-            // 确保设置对象和promptInjection对象都存在
-            if (
-                !extension_settings[extensionName] ||
-                !extension_settings[extensionName].promptInjection ||
-                !extension_settings[extensionName].promptInjection.enabled ||
-                extension_settings[extensionName].insertType ===
-                    INSERT_TYPE.DISABLED
-            ) {
-                return;
-            }
-
-            const prompt =
-                extension_settings[extensionName].promptInjection.prompt;
-            const depth =
-                extension_settings[extensionName].promptInjection.depth || 0;
-            const role = getMesRole();
-
-            debugLog(
-                `[${extensionName}] 准备注入提示词: 角色=${role}, 深度=${depth}`,
-            );
-            debugLog(
-                `[${extensionName}] 提示词内容: ${prompt.substring(0, 50)}...`,
-            );
-
-            // depth=0 = TOP priority: prepend to start of the assembled prompt
-            // (matches RPG HUD / FF4 VIR setExtensionPrompt position=0, depth=0)
-            // depth>0 = N positions from end (legacy "deep injection" behavior)
-            if (depth === 0) {
-                eventData.chat.unshift({ role: role, content: prompt });
-                debugLog(`[${extensionName}] prompt prepended at top (depth=0, top priority)`);
-            } else {
-                eventData.chat.splice(-depth, 0, {
-                    role: role,
-                    content: prompt,
-                });
-                debugLog(
-                    `[${extensionName}] prompt inserted ${depth} from end`,
-                );
-            }
-        } catch (error) {
-            console.error(`[${extensionName}] 提示词注入错误:`, error);
-            toastr.error(`提示词注入错误: ${error}`);
+// Inject pic-tag emission rules as a system message at IN_CHAT depth 1 —
+// one position before the latest user message. This makes the rules the
+// freshest operating instruction the AI sees before generating, without
+// disturbing the preset's main system block or chat history flow. User can
+// override depth via the existing depth setting; default is 1 (recommended).
+const IMAGE_PROMPT_KEY = 'ST_IMAGE_AUTO_GEN';
+const IMAGE_PROMPT_POSITION = 2; // IN_CHAT
+function refreshImagePromptInjection() {
+    try {
+        const ctx = getContext();
+        const setExtPrompt = ctx?.setExtensionPrompt || window.setExtensionPrompt;
+        if (typeof setExtPrompt !== 'function') return;
+        const cfg = extension_settings[extensionName];
+        const disabled =
+            !cfg ||
+            !cfg.promptInjection ||
+            !cfg.promptInjection.enabled ||
+            cfg.insertType === INSERT_TYPE.DISABLED;
+        const userDepth = Number(cfg?.promptInjection?.depth);
+        const depth = Number.isFinite(userDepth) && userDepth > 0 ? userDepth : 1;
+        if (disabled) {
+            setExtPrompt(IMAGE_PROMPT_KEY, '', IMAGE_PROMPT_POSITION, depth);
+            return;
         }
-    },
-);
+        const prompt = cfg.promptInjection.prompt || '';
+        const role = getMesRole();
+        setExtPrompt(IMAGE_PROMPT_KEY, prompt, IMAGE_PROMPT_POSITION, depth, false, role);
+        debugLog(`[${extensionName}] prompt injected IN_CHAT depth ${depth}, role=${role}`);
+    } catch (err) {
+        console.error(`[${extensionName}] failed to register prompt`, err);
+    }
+}
+// Initial registration + refresh hooks. The Prompt Manager reads its
+// collection at generation time, so we only need to keep our entry up to date.
+eventSource.on(event_types.APP_READY, refreshImagePromptInjection);
+eventSource.on(event_types.CHAT_CHANGED, refreshImagePromptInjection);
+eventSource.on(event_types.SETTINGS_UPDATED, refreshImagePromptInjection);
 window.stImageAutoGenTracker = window.stImageAutoGenTracker || new Map();
 window.stImageAutoGenStatuses = window.stImageAutoGenStatuses || new Map();
 // Sequential generation queue — prevents flooding ComfyUI with parallel requests
