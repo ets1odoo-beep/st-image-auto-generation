@@ -1,7 +1,19 @@
 // Default Prompt Template — kept under 2k tokens (~7 KB).
 // Teaches: pic-tag emission, match verbosity to scene complexity, 2 examples
 // (one simple, one moderately complex with light spatial anchoring).
-export const DEFAULT_PROMPT = `Emit \`<pic prompt="..." type="TYPE">\` inline whenever a visual beat warrants an image (new scene, outfit reveal, strong emotion, combat, group shot, intimate moment). One pic per beat, placed at the beat, not batched. No markdown image syntax — only the <pic> tag.
+export const DEFAULT_PROMPT = `Emit \`<pic prompt="..." type="TYPE">\` inline whenever a visual beat warrants an image. No markdown image syntax — only the <pic> tag.
+
+CADENCE — MULTIPLE PICS PER MESSAGE IS THE DEFAULT, NOT THE EXCEPTION
+If a response covers 2-3 visual beats, emit 2-3 pics. Place each one INLINE at the moment that beat occurs in the prose, NOT batched at the end. A "beat" is any of:
+- a new scene or location change
+- an outfit change / reveal / undressing step
+- a strong emotional shift (face change worth showing)
+- a new action / pose / position
+- a sex-act transition (foreplay → BJ, BJ → penetration, position swap, climax)
+- a new character entering frame
+- an environmental change (lights off, weather shift)
+
+A long sex scene with foreplay → BJ → penetration → finish should produce 4 pics, not 1. A scene where she walks into the room, sits down, then takes off her dress = 3 pics. Only emit zero pics when the message is pure dialogue with no visual change.
 
 VERBOSITY — match the scene:
 - SIMPLE (default): solo standing/sitting/walking, standard sex acts (BJ, missionary, doggy, cowgirl, riding), basic closeups. Name the act + the bodies, model handles the geometry.
@@ -32,6 +44,10 @@ LOCKS:
 - Position labels: Left / Right / Centre / Foreground / Midground / Background.
 - Rear view → no breasts/front; Front view → no ass/back.
 - Each char paragraph self-contained; no pronouns crossing paragraphs.
+
+=== INLINE CADENCE EXAMPLE — 3 pics in one prose response ===
+Prose: She walks into the room. <pic prompt="..." type="portrait"> She sits on the bed and meets your eyes. <pic prompt="..." type="closeup"> She slips the dress off her shoulders. <pic prompt="..." type="portrait"> "Come here," she whispers.
+(Each pic placed at the beat. Not batched at the end. Dialogue lines without visual change need no pic.)
 
 === SIMPLE EXAMPLE — solo sex act, all original characters ===
 <pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. Explicit adult content showing a blowjob. Inside a candlelit inn room at dusk, soft amber lamp light, four-poster bed in the background. Closeup waist-up shot, eye-level from the side. There are exactly 2 characters in this scene, no extra people, no duplicate characters. Belne, an original character (left, kneeling): adult female goblin, 147 cm petite curvaceous with large G-cup breasts, waist-length dark green ponytail falling forward, large round orange eyes looking up at his face, light mint-green skin, pointed ears, nude from the waist up with her tunic pooled around her hips. ETSVin, an original character (right, standing): adult male human, athletic build, short brown hair, blue eyes, fair skin, lower half nude with his trousers around his ankles, shirt pulled up to his chest. Interaction: Belne kneeling in front of ETSVin, her mouth around his erect penis with her lips sealed around the shaft, both her hands resting on his thighs. All 2 characters are visible at their stated positions; no extra people or duplicate versions are present." type="closeup">
