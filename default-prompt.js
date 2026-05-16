@@ -1,14 +1,27 @@
-// Default Prompt Template — pic-tag emission rules + one example.
+// Default Prompt Template — pic-tag emission rules + simple + complex examples.
 // Written for modern high-adherence SD models (Anima Base 1.0+, Pony XL,
-// Illustrious, etc.) that parse spatial relationships between body parts,
-// objects, and other characters. Treat the prompt like describing the scene
-// to a blind person who must reconstruct it physically — every hand has a
-// destination, every leg has a surface, every cropped character has a clear
-// occlusion source.
+// Illustrious, etc.) that CAN parse fine spatial relationships when given them,
+// but don't NEED that level of detail for simple scenes. Match the verbosity
+// to the scene — a single character sitting on a bed is not the same job as
+// three characters interacting with occlusion and disabilities.
 export const DEFAULT_PROMPT = `Emit \`<pic prompt="..." type="TYPE">\` tags inline in the response whenever a visual beat warrants an image — new scene, outfit reveal, strong emotion, combat, group shot, intimate moment. Place each pic AT the beat it depicts, not batched at the end. No markdown image syntax, no "Image Prompt:" text — only the <pic> tag form.
 
-CORE PRINCIPLE — SPATIAL ANCHORING
-Modern SD models have strong prompt adherence. They parse "left hand resting on the bedpost", "index finger inside her mouth", "right knee on the floor with calf folded under", "lower half of her body hidden behind the dresser, only torso and head visible". Use this. Every major body part should be anchored to something concrete: an environment object, the floor/ground, or another character's body part. Generic phrasing ("standing with hands at sides") wastes the model's capability — be specific about WHERE each limb is and WHAT it touches.
+CORE PRINCIPLE — MATCH VERBOSITY TO COMPLEXITY
+Modern SD models CAN parse "left hand resting on the bedpost", "index finger inside her mouth", "lower half hidden behind the dresser", but you only need that level of detail when the scene actually requires it. Use the simple style by default; reach for the detailed style only when the scene has something the model would otherwise get wrong.
+
+USE SIMPLE STYLE for:
+- single character standing / sitting / walking / lying down
+- standard sex acts in standard positions (blowjob, missionary, doggy, cowgirl, riding) — name the act, name the bodies, model handles the geometry
+- basic emotional closeups (one character, one expression)
+- one-character outfit reveals
+
+USE DETAILED SPATIAL ANCHORING for:
+- 2+ characters where contact points matter (who's hand on whose hip, whose leg between whose)
+- partial occlusion (character behind/under furniture, body cropped at frame edge)
+- unusual poses with weight distribution (kneeling with one leg folded, hanging upside-down, mid-action mid-air)
+- amputations / prosthetics / mobility aids — must be explicit
+- finger-level placement when it matters (fingers inside mouth, gripping a specific item)
+- cropped views ("only upper torso visible, lower body out of frame")
 
 TYPE — exactly one of:
 - portrait (2:3, solo character / outfit reveal)
@@ -23,42 +36,47 @@ PROMPT STRUCTURE (single unbroken paragraph inside prompt="..."):
 
 2. Rating from current prose: "Safe-for-work content." | "Suggestive content with partial nudity." | "Explicit adult content showing [act]."
 
-3. Scene (1-2 sentences). Describe the location as if to a blind person: exact location type + 3-5 concrete objects with their materials/conditions + time-of-day lighting + light direction (key / rim / ambient / fill). Name objects that body parts will later anchor to (bedpost, windowsill, table edge, floor, chair arm, doorframe).
+3. Scene (1-2 sentences). Location + 2-5 details + time-of-day lighting + light direction. For COMPLEX scenes, name objects that body parts will anchor to (bedpost, windowsill, table edge).
 
-4. Camera: shot type (extreme closeup / closeup / cowboy waist-up / medium full-body / wide full-environment / extreme wide) + angle (eye-level / low / high / dutch / side / from-behind). For FPP add "first-person POV from {{user}}'s eyes". For partial/cropped views explicitly state "only [upper torso / lower body / left side / etc.] visible, rest cropped out of frame".
+4. Camera: shot type (extreme closeup / closeup / cowboy waist-up / medium full-body / wide full-environment / extreme wide) + angle (eye-level / low / high / dutch / side / from-behind). For FPP add "first-person POV from {{user}}'s eyes". For cropped views state what's visible AND what's cropped.
 
 5. Count: "There are exactly N characters in this scene, no extra people, no duplicate characters."
 
-6. Per character paragraph starting "FullName (POSITION):" covering — in this order:
-   (a) Species + franchise — e.g. "goblin (original character)", "human (Final Fantasy 7)".
-   (b) GENDER + apparent age — ALWAYS state explicitly: "adult female", "young male", "elderly nonbinary humanoid". Never omit. Models confuse gender when it's only implied by pronouns.
-   (c) Body — height + build + bust/dick/ass size + waist + thighs VERBATIM from VIR. State limb completeness: "all four limbs intact" OR "left arm amputated above elbow with leather stump cap" OR "wheelchair-bound, both legs paralysed and braced". Don't assume completeness — say it.
-   (d) Hair — colour + length + style + texture + parting + bangs/fringe type + tie/clip details + which way the ponytail/braid falls (e.g. "tail draped over right shoulder", "braid coiled around left ear").
-   (e) Eyes — colour + shape + gaze direction (looking at viewer / down-left / up at partner / closed / half-lidded) + state (clear / teary / glassy / pupils dilated).
-   (f) Face — skin tone, brow shape, lip detail, marks (scars/tattoos/piercings/freckles), expression with physical cues (brow position, mouth state, jaw tension).
-   (g) Non-human traits — tail/wings/horns/ears/fur/scales VERBATIM. Anchor each: "tail wrapped around her right thigh", "left wing extended brushing the ceiling beam", "pointed ears tilted forward toward speaker".
-   (h) Outfit — layer-by-layer top to bottom with exact colours, materials, fit, condition, and what's worn UNDER each piece if relevant. Footwear explicit (or "barefoot"). Underwear visibility explicit.
-   (i) Accessories + equipment — exact material, colour, anchoring point ("brass hoop earring through left earlobe", "small dagger sheathed at right hip on the belt").
-   (j) POSE — head position, torso orientation, every limb anchored to something. Use these patterns:
-        • "[limb] resting on / pressed against / draped over / wrapped around / inside / behind / under [object or body part]"
-        • "[N fingers] of [left/right] hand [verb] [object/body part]" (e.g. "three fingers of her right hand pressing the loose tunic collar against her collarbone")
-        • For sitting / kneeling: state which surface bears weight ("kneeling on the floor with right knee on the wooden plank, left foot tucked under her right thigh, balls of left foot taking weight").
-        • For cropped views: state what's visible AND what's cropped ("only upper torso and arms visible above the table edge, lower body cropped out of frame").
-        • For partial occlusion: state the occluder ("right leg hidden behind the bedpost, only left leg and both arms visible to viewer").
+6. Per character paragraph starting "FullName (POSITION):" covering:
+   (a) Species + franchise — e.g. "goblin (original character)", "human".
+   (b) GENDER + apparent age — ALWAYS explicit: "adult female", "young male", "elderly nonbinary humanoid". Never omit.
+   (c) Body — height + build + bust/dick/ass + waist + thighs VERBATIM from VIR. State limb status only when NON-standard: "left arm amputated above elbow", "wheelchair-bound, both legs paralysed". Skip for fully-limbed standard bodies.
+   (d) Hair — colour + length + style + texture; add detail (parting / bangs / how ponytail falls) only when relevant or when card specifies.
+   (e) Eyes — colour + shape + gaze direction.
+   (f) Face — skin tone, marks, expression.
+   (g) Non-human traits — tail/wings/horns/ears/fur/scales VERBATIM.
+   (h) Outfit — pieces with colours + materials. Footwear stated. Underwear only if visible / removed.
+   (i) Accessories + equipment.
+   (j) POSE — name the action plainly for simple poses ("standing beside the bed", "kneeling between his thighs giving a blowjob"). For COMPLEX poses, anchor each non-default body part to a reference: "left hand cupping the back of his neck", "right knee on the floor with left foot tucked under right thigh". Don't over-specify simple standing.
 
-7. Multi-char only — interaction line with FULL NAMES (never pronouns). Anchor each contact point: "Arika's left hand cupping the back of ETSVin's neck, her right palm flat against his chest at the sternum, her bare knees straddling his hips". For NSFW use plain anatomical geometry, never abstract verbs ("her mouth around his erect penis, lips sealed around the shaft, her right hand wrapped around the base" not "performs oral").
+7. Multi-char only — interaction line. For SIMPLE acts: name the act + names + plain geometry ("Arika kneeling in front of ETSVin, her mouth around his erect penis, both her hands gripping his thighs"). For COMPLEX interactions: anchor each contact point.
 
 8. Closer: "All N characters are visible in the frame at their stated positions; no extra people or duplicate versions are present."
 
 CRITICAL LOCKS:
-- GENDER explicit per character — never rely on pronouns or implication.
-- Copy hair / eyes / body / outfit / non-human features VERBATIM from VIR data. Never paraphrase, synonym-swap, or resize.
-- Limb completeness explicit — affirm intact or specify amputation/prosthetic/paralysis.
-- Each major body part (head, torso, both arms, both hands, both legs, tail/wings if present) anchored to a concrete reference (environment object, ground, or another character's part).
+- GENDER explicit per character.
+- Copy hair / eyes / body / outfit / non-human features VERBATIM from VIR data.
+- Limb status only when non-standard (otherwise omit, models default to fully-limbed).
 - Each character paragraph self-contained; no pronouns crossing paragraphs.
 - Position labels: Left / Right / Centre / Foreground / Midground / Background.
 - Rear view → no breasts/front; Front view → no ass/back; never mix incompatible views.
-- For cropped/occluded characters: state what's visible AND what's cropped/hidden + the occluder.
 
-EXAMPLE — single character with full spatial anchoring:
-<pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. Suggestive content with partial nudity. Inside a candlelit inn room at dusk, warm orange glow from a single oil lamp on a dark walnut dresser, scattered parchment scrolls and a half-empty pewter wine cup beside the lamp, a four-poster oak bed with rumpled cream linen sheets and a tossed wool blanket spilling onto the wooden floor, a leather travel satchel propped against the foot of the bed, a leaded glass window in the back wall showing fading violet sky with light rain droplets on the panes, key light from the lamp at frame right warm orange casting soft long shadows leftward across the floor, rim light from the window cool blue along her right shoulder and the bedpost. Medium full-body shot, eye-level angle from the foot of the bed. There are exactly 1 characters in this scene, no extra people, no duplicate characters. Belne (centre, kneeling beside the bed): goblin (original character), adult female, apparent twenty years old, 147 cm petite curvaceous build with large G-cup breasts and ample rounded ass and slim waist with thick thighs, all four limbs fully intact with no amputations or prosthetics, waist-length straight dark green hair parted slightly off-centre to the left with the high ponytail tied at the crown using a thin brown leather cord and the tail draping over her right shoulder ending just above her right hip with two thin braids framing the sides of her face starting from her temples and merging into the ponytail, large round orange eyes with thick dark lashes looking up and slightly to the left at the viewer's face, light mint-green skin smooth with warm undertone faintly flushed across her cheeks and the bridge of her small nose, soft-featured face with slightly tapered pointed ears the tips bent gently outward, no visible scars or tattoos, beige short-sleeved loose-weave cotton tunic with a scoop neckline hanging open low enough to show the upper swell of her cleavage and secured loosely at the waist by a thin braided brown leather belt with a small brass buckle, the tunic hem riding up to mid-thigh as she kneels exposing the bottoms of her thighs, brown linen short briefs visible under the hiked tunic, barefoot with the soles of both feet showing dirt smudges, small brass hoop earring through each earlobe, kneeling on the wooden floor with her right knee planted flat on the planks and her left knee tucked under her right thigh with the top of her left foot folded flat against the floorboards taking partial weight, her torso angled toward the viewer with shoulders square, her left forearm resting along the edge of the mattress with her left palm flat on the cream linen sheet and four fingers spread wide, her right hand pressed gently to her own upper chest with the index and middle fingers tracing along the open neckline of the tunic just above her collarbone and the other two fingers curled against her sternum, her pointed ears tilted slightly forward, her lips parted as if mid-breath and her dark eyebrows lifted in soft surprise. All 1 characters are visible at their stated positions; no extra people or duplicate versions are present." type="portrait">`;
+================================================================================
+SIMPLE EXAMPLE — single character, standard pose, ~600 chars
+================================================================================
+<pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. Suggestive content with partial nudity. Inside a candlelit inn room at dusk, warm orange glow from an oil lamp, a four-poster bed with rumpled linens. Medium full-body shot, eye-level. There are exactly 1 characters in this scene, no extra people, no duplicate characters. Belne (centre): goblin (original character), adult female, 147 cm petite curvaceous with large G-cup breasts, slim waist, thick thighs, waist-length dark green hair tied in a high ponytail, large round orange eyes looking at the viewer, light mint-green skin, pointed ears, beige short-sleeved cotton tunic with a thin brown leather belt at the waist, brown leather sandals, small brass hoop earrings, standing beside the bed with both hands clasped at her waist, parted lips, lifted brows. All 1 characters are visible at their stated positions; no extra people or duplicate versions are present." type="portrait">
+
+================================================================================
+SIMPLE EXAMPLE — single character, standard sex act, ~700 chars
+================================================================================
+<pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. Explicit adult content showing a blowjob. Inside the same candlelit inn room at dusk, soft amber lamp light, the four-poster bed visible in the background. Closeup waist-up shot, eye-level from the side. There are exactly 2 characters in this scene, no extra people, no duplicate characters. Belne (left, kneeling): goblin (original character), adult female, 147 cm petite curvaceous with large G-cup breasts, waist-length dark green ponytail falling forward, large orange eyes looking up at his face, light mint-green skin, pointed ears, nude from the waist up with her tunic pooled around her hips. ETSVin (right, standing): human male, adult, athletic build, short brown hair, blue eyes, fair skin, lower half nude with his trousers around his ankles, shirt still on and pulled up to his chest. Interaction: Belne kneeling in front of ETSVin, her mouth around his erect penis with her lips sealed around the shaft, both her hands resting on his thighs. All 2 characters are visible at their stated positions; no extra people or duplicate versions are present." type="closeup">
+
+================================================================================
+COMPLEX EXAMPLE — full spatial anchoring, used when geometry actually matters
+================================================================================
+<pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. Explicit adult content showing a threesome with one character receiving anal from behind and oral in front. Inside a stone temple alcove at midnight, single torch sconce on the wall casting warm orange light from frame right, cold blue moonlight spilling through a high circular window above, a low altar of polished black marble in the foreground draped with crimson silk, key light from torch warm orange on the rear character's back, rim light from moonlight cool blue along the kneeling character's shoulders. Wide full-environment shot, low angle from floor level. There are exactly 3 characters in this scene, no extra people, no duplicate characters. Belne (centre, bent over the altar): goblin (original character), adult female, 147 cm petite curvaceous with large G-cup breasts crushed against the cold black marble of the altar, waist-length dark green ponytail draped forward past the altar edge, large orange eyes squeezed half-shut, light mint-green skin flushed warm pink across her shoulders, pointed ears tilted back, fully nude with her tunic discarded on the floor to her left, palms flat on the altar surface forearms taking her weight, both knees bent and bare feet planted on the stone floor with her hips raised. King Verros (behind Belne, standing): human male, fat balding middle-aged, ruddy skin, gold silk robe parted open and pushed aside at the front, nude from waist down, his left hand gripping Belne's right hip, his right hand gripping her left hip, his erect penis penetrating Belne anally from behind. Marah (front of altar, kneeling on a low cushion): elven female, adult, slim with B-cup breasts, long pale lavender hair coiled around her left shoulder in a loose braid, violet eyes closed, pale skin, pointed ears pinned back, fully nude, kneeling on a red velvet cushion with her right knee planted on the cushion and her left foot folded beneath her right thigh taking partial weight, her face tilted up and her mouth wrapped around Belne's left index and middle fingers which Belne has pushed past Marah's lips up to the second knuckle. Interaction: King Verros's hips pressed against Belne's ass with anal penetration, Belne's left hand pushed into Marah's mouth with two fingers between Marah's teeth, Belne's right arm extended forward palm flat on the altar bracing her weight, Marah's both hands gripping the front edge of the altar. All 3 characters are visible at their stated positions; no extra people or duplicate versions are present." type="scene">`;
