@@ -545,11 +545,15 @@ function getMesRole() {
     }
 }
 
-// Inject pic-tag emission rules as a system message at IN_CHAT depth 1 —
-// one position before the latest user message. This makes the rules the
-// freshest operating instruction the AI sees before generating, without
-// disturbing the preset's main system block or chat history flow. User can
-// override depth via the existing depth setting; default is 1 (recommended).
+// Inject pic-tag emission rules at IN_CHAT depth 1 — one position before the
+// latest user message — so they are the freshest operating instruction the AI
+// sees before generating.
+//
+// IMPORTANT: we inject with the 'user' role, NOT 'system'. Many presets enable
+// squash_system_messages, which merges every system-role injection into one
+// blob and reorders it — that buries this injection near the top of the prompt
+// and destroys its depth-1 recency. A 'user'-role message is never squashed,
+// so it stays exactly at depth 1, right before generation, on every preset.
 const IMAGE_PROMPT_KEY = 'ST_IMAGE_AUTO_GEN';
 const IMAGE_PROMPT_POSITION = 2; // IN_CHAT
 function refreshImagePromptInjection() {
@@ -570,9 +574,11 @@ function refreshImagePromptInjection() {
             return;
         }
         const prompt = cfg.promptInjection.prompt || '';
-        const role = getMesRole();
+        // Force 'user' role so squash_system_messages can't merge-and-bury it.
+        // (getMesRole() returns 'system' by default, which gets squashed.)
+        const role = 'user';
         setExtPrompt(IMAGE_PROMPT_KEY, prompt, IMAGE_PROMPT_POSITION, depth, false, role);
-        debugLog(`[${extensionName}] prompt injected IN_CHAT depth ${depth}, role=${role}`);
+        debugLog(`[${extensionName}] prompt injected IN_CHAT depth ${depth}, role=${role} (squash-proof)`);
     } catch (err) {
         console.error(`[${extensionName}] failed to register prompt`, err);
     }
@@ -652,6 +658,37 @@ function clearPendingQueue() {
 
 eventSource.on(event_types.MESSAGE_SWIPED, clearPendingQueue);
 eventSource.on(event_types.CHAT_CHANGED, clearPendingQueue);
+
+// ── Pic-tag rescue from reasoning blocks ────────────────────────────────────
+// Thinking models (Kimi, DeepSeek, etc.) compose the <pic> tag mid-reasoning
+// and often leave it INSIDE the <think>...</think> block. The old code stripped
+// <think> before scanning for pics, so any pic placed in reasoning was deleted
+// with it — that is the "pics work, then vanish for a few turns, then come
+// back" intermittency: it is a coin-flip per generation on where the model
+// puts the tag.
+//
+// Fix: hoist every <pic ...> tag OUT of <think> blocks and into visible prose
+// (right after the block) before extraction. The pic then generates AND is
+// visible, regardless of where the model placed it. The rest of the reasoning
+// stays in <think> and is display-stripped normally.
+function hoistPicsFromThink(mes) {
+    const text = String(mes || '');
+    if (!/<think>/i.test(text) && !/<\/think>/i.test(text)) return text;
+    const picTag = /<pic\b[^>]*>/gi;
+    // Match a <think> block, OR a dangling reasoning run that ends at </think>
+    // with no opening tag (the assistant-prefill case: prefill adds <think>,
+    // so the model output starts mid-reasoning and only emits </think>).
+    const thinkBlock = /(<think>[\s\S]*?<\/think>)|(^[\s\S]*?<\/think>)/i;
+    const m = text.match(thinkBlock);
+    if (!m) return text;
+    const block = m[0];
+    const rescued = block.match(picTag) || [];
+    if (rescued.length === 0) return text;
+    const blockWithoutPics = block.replace(picTag, '');
+    // Re-insert the rescued pic tags immediately after the reasoning block,
+    // i.e. at the very start of the visible prose.
+    return text.replace(block, blockWithoutPics + '\n' + rescued.join('\n') + '\n');
+}
 
 eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
     if (!extension_settings[extensionName] || extension_settings[extensionName].insertType === INSERT_TYPE.DISABLED) return;
