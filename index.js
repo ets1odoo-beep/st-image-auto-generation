@@ -623,17 +623,22 @@ function getMissCounter() {
 function buildPicPriorityReminder() {
     const cfg = getMissCounter();
     const misses = Math.max(0, cfg.consecutivePicMisses || 0);
+    // Always-present anti-deliberation header — bypasses provider's agentic
+    // "draft-and-verify" training that bloats thinking models like Kimi K2.6.
+    const ANTI_AGENT = `[REASONING MODE: single-pass RP, not agent verify-loop. Apply rules silently — no rule-citation in reasoning, no draft-then-revise.]`;
     if (misses === 0) {
-        // Steady-state tiny anchor — keeps the rule in fresh attention.
-        return `[PIC REMINDER] If anything visual happens this turn (movement, expression shift, pose change, undress, sex-act transition), emit at least one literal <pic prompt="..." type="..."> tag inline at that beat in the final visible reply. Pic tags in <think>/reasoning do NOT count.`;
+        return `${ANTI_AGENT}
+[PIC REMINDER] If anything visual happens this turn (movement, expression, pose, undress, sex-act), emit at least one literal <pic prompt="..." type="..."> tag inline at that beat in the FINAL visible reply. Pic tags in <think>/reasoning do NOT count.`;
     }
     if (misses === 1) {
-        return `[PIC PRIORITY — your previous reply emitted NO <pic> tag despite having a visual beat. That is malformed.
+        return `${ANTI_AGENT}
+[PIC PRIORITY — your previous reply emitted NO <pic> tag despite having a visual beat. That is malformed.
 EVERY reply with any movement/expression-change/pose-shift/undress/sex-act MUST include at least one literal <pic prompt="..." type="..."> tag IN THE FINAL VISIBLE REPLY (not <think>, not reasoning).
 Use the existing pic prompt rules: name each character ONCE, copy VIR fields verbatim, give each character one distinct position slot.
 [END PIC PRIORITY]`;
     }
-    return `[PIC PRIORITY — CRITICAL: your last ${misses} replies have skipped <pic> tags. Visual continuity is broken — the chat has no images for entire scenes.
+    return `${ANTI_AGENT}
+[PIC PRIORITY — CRITICAL: your last ${misses} replies have skipped <pic> tags. Visual continuity is broken — the chat has no images for entire scenes.
 FIX NOW: this reply MUST include at least one literal <pic prompt="..." type="..."> tag in the final visible message text. NOT inside <think>. NOT inside reasoning blocks. NOT inside <details>. As an actual literal HTML-style tag in the prose.
 Format: <pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. <rating>. <scene>. <camera>. <character blocks copied verbatim from VIR>. <interaction>." type="portrait|closeup|scene|landscape|square">
 If a visual beat happens (almost every roleplay turn), a reply WITHOUT a <pic> tag is REJECTED. Emit the tag.
