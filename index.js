@@ -606,11 +606,102 @@ function refreshImagePromptInjection() {
         console.error(`[${extensionName}] failed to register prompt`, err);
     }
 }
+// ── v1.4 Anti-skip: depth-1 escalating priority reminder ─────────────────────
+// Pattern matches ff4-vir v5.4.0. Tracks consecutive turns where AI emits no
+// <pic> tag despite substantive prose (likely visual beat present). When
+// misses accumulate, a stronger reminder fires at depth 1 (fresher than the
+// main prompt at depth 0).
+const PIC_PRIORITY_KEY = 'ST_IMAGE_PIC_PRIORITY';
+const PIC_PRIORITY_POSITION = 2; // IN_CHAT
+const PIC_PRIORITY_DEPTH = 1;
+function getMissCounter() {
+    const cfg = extension_settings[extensionName] || {};
+    if (typeof cfg.consecutivePicMisses !== 'number') cfg.consecutivePicMisses = 0;
+    if (typeof cfg.totalPicMisses !== 'number') cfg.totalPicMisses = 0;
+    return cfg;
+}
+function buildPicPriorityReminder() {
+    const cfg = getMissCounter();
+    const misses = Math.max(0, cfg.consecutivePicMisses || 0);
+    if (misses === 0) {
+        // Steady-state tiny anchor — keeps the rule in fresh attention.
+        return `[PIC REMINDER] If anything visual happens this turn (movement, expression shift, pose change, undress, sex-act transition), emit at least one literal <pic prompt="..." type="..."> tag inline at that beat in the final visible reply. Pic tags in <think>/reasoning do NOT count.`;
+    }
+    if (misses === 1) {
+        return `[PIC PRIORITY — your previous reply emitted NO <pic> tag despite having a visual beat. That is malformed.
+EVERY reply with any movement/expression-change/pose-shift/undress/sex-act MUST include at least one literal <pic prompt="..." type="..."> tag IN THE FINAL VISIBLE REPLY (not <think>, not reasoning).
+Use the existing pic prompt rules: name each character ONCE, copy VIR fields verbatim, give each character one distinct position slot.
+[END PIC PRIORITY]`;
+    }
+    return `[PIC PRIORITY — CRITICAL: your last ${misses} replies have skipped <pic> tags. Visual continuity is broken — the chat has no images for entire scenes.
+FIX NOW: this reply MUST include at least one literal <pic prompt="..." type="..."> tag in the final visible message text. NOT inside <think>. NOT inside reasoning blocks. NOT inside <details>. As an actual literal HTML-style tag in the prose.
+Format: <pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. <rating>. <scene>. <camera>. <character blocks copied verbatim from VIR>. <interaction>." type="portrait|closeup|scene|landscape|square">
+If a visual beat happens (almost every roleplay turn), a reply WITHOUT a <pic> tag is REJECTED. Emit the tag.
+[END PIC PRIORITY]`;
+}
+function refreshPicPriorityInjection() {
+    try {
+        const ctx = getContext();
+        const setExtPrompt = ctx?.setExtensionPrompt || window.setExtensionPrompt;
+        if (typeof setExtPrompt !== 'function') return;
+        const cfg = extension_settings[extensionName];
+        const disabled = !cfg || !cfg.promptInjection || !cfg.promptInjection.enabled || cfg.insertType === INSERT_TYPE.DISABLED;
+        if (disabled) {
+            setExtPrompt(PIC_PRIORITY_KEY, '', PIC_PRIORITY_POSITION, PIC_PRIORITY_DEPTH);
+            return;
+        }
+        setExtPrompt(PIC_PRIORITY_KEY, buildPicPriorityReminder(), PIC_PRIORITY_POSITION, PIC_PRIORITY_DEPTH, false, 'user');
+        debugLog(`[${extensionName}] pic-priority injected at depth ${PIC_PRIORITY_DEPTH} (misses=${cfg.consecutivePicMisses||0})`);
+    } catch(e) { console.warn(`[${extensionName}] pic-priority injection failed`, e); }
+}
+
+// Hook GENERATION_ENDED to count misses (substantive reply with no pic tag = miss).
+// Reset on any reply that successfully emitted a pic tag.
+eventSource.on(event_types.GENERATION_ENDED, () => {
+    try {
+        const ctx = getContext();
+        const last = ctx?.chat?.[ctx.chat.length - 1];
+        if (!last || last.is_user || last.is_system) return;
+        const cfg = getMissCounter();
+        const mes = String(last.mes || '');
+        const reasoning = String(last.extra?.reasoning || '');
+        // Look for evidence the AI emitted a pic this turn (in visible reply OR
+        // the auto-gen extension stored its prompt). Avoid counting markdown
+        // image markers from earlier turns or character backgrounds.
+        const hadInlinePrompt = !!(last.extra?.inlineImagePrompts && Object.keys(last.extra.inlineImagePrompts).length);
+        const visiblePicTag = /<pic\b[^>]*prompt=/i.test(mes);
+        const visibleImageMd = /!\[generated image\]/i.test(mes);
+        const reasoningPicOnly = !visiblePicTag && !visibleImageMd && /<pic\b/i.test(reasoning);
+
+        const wordCount = mes.trim().split(/\s+/).length;
+        const looksSubstantive = wordCount >= 60;
+
+        if (hadInlinePrompt || visiblePicTag || visibleImageMd) {
+            if ((cfg.consecutivePicMisses||0) > 0) {
+                debugLog(`[${extensionName}] pic emitted — resetting miss counter (was ${cfg.consecutivePicMisses})`);
+            }
+            cfg.consecutivePicMisses = 0;
+        } else if (reasoningPicOnly) {
+            // Leak into reasoning — count as miss AND log clearly
+            cfg.consecutivePicMisses = (cfg.consecutivePicMisses || 0) + 1;
+            cfg.totalPicMisses = (cfg.totalPicMisses || 0) + 1;
+            console.warn(`[${extensionName}] PIC LEAK — tag was in reasoning, NOT visible reply (miss #${cfg.consecutivePicMisses})`);
+        } else if (looksSubstantive) {
+            cfg.consecutivePicMisses = (cfg.consecutivePicMisses || 0) + 1;
+            cfg.totalPicMisses = (cfg.totalPicMisses || 0) + 1;
+            console.warn(`[${extensionName}] pic miss #${cfg.consecutivePicMisses} (total ${cfg.totalPicMisses})`);
+        }
+        const ctx2 = getContext();
+        ctx2?.saveSettingsDebounced?.();
+        refreshPicPriorityInjection();
+    } catch(e) { console.warn(`[${extensionName}] miss tracking failed`, e); }
+});
+
 // Initial registration + refresh hooks. The Prompt Manager reads its
 // collection at generation time, so we only need to keep our entry up to date.
-eventSource.on(event_types.APP_READY, refreshImagePromptInjection);
-eventSource.on(event_types.CHAT_CHANGED, refreshImagePromptInjection);
-eventSource.on(event_types.SETTINGS_UPDATED, refreshImagePromptInjection);
+eventSource.on(event_types.APP_READY, () => { refreshImagePromptInjection(); refreshPicPriorityInjection(); });
+eventSource.on(event_types.CHAT_CHANGED, () => { refreshImagePromptInjection(); refreshPicPriorityInjection(); });
+eventSource.on(event_types.SETTINGS_UPDATED, () => { refreshImagePromptInjection(); refreshPicPriorityInjection(); });
 window.stImageAutoGenTracker = window.stImageAutoGenTracker || new Map();
 window.stImageAutoGenStatuses = window.stImageAutoGenStatuses || new Map();
 // Sequential generation queue — prevents flooding ComfyUI with parallel requests
