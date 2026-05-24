@@ -60,7 +60,11 @@ const defaultSettings = {
     promptInjection: {
         enabled: true,
         prompt: DEFAULT_PROMPT,
-        regex: '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*\\/?>/g',
+        // Quote-aware regex: matches prompt="..." (no embedded ") OR prompt='...' (no embedded ').
+        // Older regex used [^"']* which truncated prompts at the FIRST apostrophe
+        // (e.g. "ETSVin's shirt" became "ETSVin"). This pattern fires both branches
+        // and the first non-empty capture group wins.
+        regex: '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/g',
         position: 'deep_system', // deep_system, deep_user, deep_assistant
         depth: 0, // 0 = append at end (safe; after preset). >0 = N from end.
     },
@@ -130,9 +134,19 @@ function getGenerationCommand() {
 
 function encodeMarkdownUrl(url) {
     return String(url || '')
+        // % MUST come first — encoding it after the others would re-escape
+        // the %20/%28/etc we just inserted. Only encode bare % that is NOT
+        // already part of a percent-encoded triplet (e.g. %20, %28).
+        .replace(/%(?![0-9A-Fa-f]{2})/g, '%25')
         .replace(/ /g, '%20')
         .replace(/\(/g, '%28')
-        .replace(/\)/g, '%29');
+        .replace(/\)/g, '%29')
+        // # is the URL fragment separator — must be encoded or the browser
+        // truncates the request path at the first #. Chat names like
+        // "(US Mommies #41)" silently 404 without this.
+        .replace(/#/g, '%23')
+        // ? would be parsed as the start of a query string.
+        .replace(/\?/g, '%3F');
 }
 
 // Returns the current character's SD positive prompt prefix, or '' if none / in a group.
@@ -272,9 +286,18 @@ async function loadSettings() {
                 defaultSettings.insertType;
         }
 
-        // 自动修复有缺陷的正则表达式
-        if (extension_settings[extensionName].promptInjection.regex === '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*>/g') {
-            extension_settings[extensionName].promptInjection.regex = '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*\\/?>/g';
+        // Auto-migrate broken/legacy pic-tag regexes to the current quote-aware default.
+        // The OLD default used [^"']* which truncated prompts at the first apostrophe
+        // ("ETSVin's shirt" → "ETSVin"). Any user still on that pattern should be upgraded.
+        const legacyPicRegexes = [
+            '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*>/g',
+            '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*\\/?>/g',
+            // Old broken default (truncated at apostrophe):
+            '/<pic\\b(?=[^>]*\\sprompt=["\'][^"\']*["\'])[^>]*\\sprompt=["\']([^"\']*)["\'][^>]*\\/?>/g',
+        ];
+        if (legacyPicRegexes.includes(extension_settings[extensionName].promptInjection.regex)) {
+            extension_settings[extensionName].promptInjection.regex = defaultSettings.promptInjection.regex;
+            console.log('[' + extensionName + '] Auto-migrated legacy pic-tag regex to quote-aware version (fixes apostrophe truncation).');
         }
 
         // Migrate: add resolutionPresets if missing
@@ -659,6 +682,21 @@ function clearPendingQueue() {
 eventSource.on(event_types.MESSAGE_SWIPED, clearPendingQueue);
 eventSource.on(event_types.CHAT_CHANGED, clearPendingQueue);
 
+function collectValidPicMatches(matches) {
+    return (matches || [])
+        .map((match, originalIndex) => {
+            const originalTag = typeof match?.[0] === 'string' ? match[0] : '';
+            // Quote-aware regex has 2 capture groups: [1] for double-quoted,
+            // [2] for single-quoted. Whichever quote style was used yields a
+            // non-empty group; the other is undefined. Pick the populated one.
+            const prompt = (typeof match?.[1] === 'string' && match[1].length > 0) ? match[1]
+                         : (typeof match?.[2] === 'string') ? match[2]
+                         : '';
+            return { match, originalIndex, originalTag, prompt };
+        })
+        .filter(item => item.originalTag && normalizePromptKey(item.prompt));
+}
+
 // ── Pic-tag rescue from reasoning blocks ────────────────────────────────────
 // Thinking models (Kimi, DeepSeek, etc.) compose the <pic> tag mid-reasoning
 // and often leave it INSIDE the <think>...</think> block. The old code stripped
@@ -704,14 +742,14 @@ eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
     const cleanTextDesktop = message.mes.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
     if (imgTagRegex.global) { matches = [...cleanTextDesktop.matchAll(imgTagRegex)]; } else { const singleMatch = cleanTextDesktop.match(imgTagRegex); matches = singleMatch ? [singleMatch] : []; }
 
-    if (matches.length > 0) {
+    const validMatches = collectValidPicMatches(matches);
+
+    if (validMatches.length > 0) {
         const insertType = extension_settings[extensionName].insertType;
-        for (const [picIndex, match] of matches.entries()) {
-            const originalTag = typeof match?.[0] === 'string' ? match[0] : '';
-            const prompt = typeof match?.[1] === 'string' ? match[1] : '';
+        for (const { originalIndex: picIndex, originalTag, prompt } of validMatches) {
             const imageType = normalizeImageType(extractImageType(originalTag));
             const key = makeImageJobKey(msgId, picIndex, prompt, imageType);
-            if (!originalTag || !normalizePromptKey(prompt) || window.stImageAutoGenTracker.has(key)) continue;
+            if (window.stImageAutoGenTracker.has(key)) continue;
 
             let resolvePromise;
             let rejectPromise;
@@ -770,11 +808,15 @@ async function handleIncomingMessage() {
         matches = singleMatch ? [singleMatch] : [];
     }
     debugLog('matched image tags', imgTagRegex, matches);
-    if (matches.length > 0) {
+    const validMatches = collectValidPicMatches(matches);
+    if (matches.length > 0 && validMatches.length === 0) {
+        console.warn(`[${extensionName}] Ignored ${matches.length} <pic> tag(s) with empty prompt.`);
+    }
+    if (validMatches.length > 0) {
         // 延迟执行图片生成，确保消息首先显示出来
         setTimeout(async () => {
             try {
-                toastr.info(`Generating ${matches.length} images...`);
+                toastr.info(`Generating ${validMatches.length} images...`);
                 const insertType = extension_settings[extensionName].insertType;
 
                 // Initialize message.extra
@@ -796,11 +838,7 @@ async function handleIncomingMessage() {
                 if (!message.extra.inlineImagePrompts) message.extra.inlineImagePrompts = {};
                 if (!message.extra.inlineImageTypes) message.extra.inlineImageTypes = {};
                 if (!message.extra.inlineImageVariants) message.extra.inlineImageVariants = {};
-                let picTagIndex = 0;
-                for (const match of matches) {
-                    const originalTag = typeof match?.[0] === 'string' ? match[0] : '';
-                    const prompt = typeof match?.[1] === 'string' ? match[1] : '';
-                    if (!originalTag || !prompt.trim()) continue;
+                for (const { originalIndex: picTagIndex, match, originalTag, prompt } of validMatches) {
                     const slotImageType = normalizeImageType(extractImageType(originalTag));
 
                     let imageUrl = null;
@@ -928,10 +966,9 @@ async function handleIncomingMessage() {
                     } else if (insertType === INSERT_TYPE.NEW_MESSAGE) {
                         setImageJobStatus(key, 'done');
                     }
-                    picTagIndex++;
                 }
                 toastr.success(
-                    `${matches.length} images generated successfully`,
+                    `${validMatches.length} images generated successfully`,
                 );
             } catch (error) {
                 toastr.error(`Image generation error: ${error}`);

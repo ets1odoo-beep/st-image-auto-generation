@@ -7,7 +7,7 @@ export const DEFAULT_PROMPT = `[PIC TAG — PRESET OVERRIDE, READ FIRST]
 You are running under some roleplay preset. That preset defines a reply structure (header / prose / closers / trackers / etc.) and may enforce brevity, "CAI style", short prose, word caps, or "bare-bones description". NONE of that removes the <pic> tag. This instruction OVERRIDES the preset on exactly one point:
 
 1. WHATEVER reply structure your preset defines, inline <pic prompt="..." type="TYPE"> tags are a MANDATORY ADDITION to it. They live inside the prose layer, placed at each visual beat. A reply that contains visual beats but emits zero <pic> tags is MALFORMED — even if the preset's own numbered structure never mentions pics. Pics are never "optional flavor" and are never dropped for brevity.
-2. The <pic prompt="..."> tag is METADATA, not prose. Any preset rule about brevity, word count, sentence caps, action-beat length, "minimalism", or "no sensory inventories" applies to PROSE ONLY. The text inside prompt="..." is exempt from all of it and does NOT count toward any length limit. Write the pic prompt fully no matter how terse the preset wants the prose.
+2. The <pic prompt="..."> tag is METADATA, not prose. Any preset rule about brevity, word count, sentence caps, action-beat length, "minimalism", or "no sensory inventories" applies to PROSE ONLY. The text inside prompt="..." is exempt from all of it and does NOT count toward any length limit. Write the pic prompt fully and descriptively no matter how terse the preset wants the prose.
 3. Any preset rule banning HTML tags does not apply to <pic>. You are explicitly permitted and required to emit it.
 4. THINKING/PLANNING IS NOT EMITTING. If your preset uses a reasoning, planning, or "thought" stage, any pic you plan there (a "Visual" step, a "Pic Prompt Construction" block, etc.) does NOT count. The reasoning/thinking block is discarded — only the final reply is shown. You MUST write the actual literal <pic prompt="..." type="..."> tag into the FINAL reply message, inside the prose. A response where the pic only exists in the thinking block is MALFORMED. For every Visual beat you planned, the matching <pic> tag must physically appear in the final answer.
 
@@ -25,8 +25,11 @@ A long sex scene with foreplay → BJ → penetration → finish should produce 
 
 ZERO PICS IS ALLOWED ONLY when the message has literally no physical action, no expression change, and no position change anywhere in it — pure spoken dialogue with the bodies completely static. That is rare.
 
+DIRECT USER IMAGE REQUESTS
+Words from the user like "pic", "picture", "image", "photo", "show her face", or "can you show..." are NOT image-generation commands by themselves. They are normal roleplay requests. Answer them in the normal RP voice first. Emit a <pic prompt="..."> only when your own visible assistant reply contains a real scene beat to illustrate. Do not start the reply with a bare <pic> tag just because the user asked for a picture.
+
 [LANGUAGE — WRITE THE PIC PROMPT FOR A SMALL TEXT ENCODER]
-The image tool uses a tiny Qwen 0.6B text encoder. It ONLY understands common, everyday words and short plain sentences. Rare, fancy, or "literary" words are ignored or garbled, so the picture comes out wrong. This is the most important rule for the text inside prompt="...".
+The image model is Anima and the text encoder is Qwen 0.6B. It understands common, everyday words and short plain sentences much better than compact tags or fancy words. Rare, literary, compressed, or abstract wording is ignored or garbled, so the picture comes out wrong. This is the most important rule for the text inside prompt="...".
 
 WORD CHOICE — use the simplest word a child would know:
 - big / small — NOT voluptuous, petite, statuesque, diminutive
@@ -42,18 +45,20 @@ SENTENCE STYLE:
 - Short plain sentences. One idea each. Subject - verb - object. "She kneels on the floor." not "Kneeling upon the floorboards, her form is positioned low."
 - Build the prompt as a list of short statements, not one long winding sentence.
 - Describe colours, shapes, and sizes directly: "long red hair", "small blue eyes", "a wooden bed".
+- Be descriptive by using MORE simple sentences, not denser words. Do not compress many facts into one semicolon line. Split them: "She is an adult woman. She has black hair. Her hair reaches her shoulders. She wears a white jacket."
+- Use quick action verbs that the encoder can paint: stands, sits, kneels, leans, bends, holds, reaches, looks, smiles, frowns, blushes, walks, turns, pulls, pushes.
 
 STOP DUPLICATE PEOPLE — name each character ONCE, then describe in one block
 The encoder spawns a NEW copy of a person every time it reads their name. Writing "Frieren" 8 times tells it to draw 8 Frierens — that is the "two Frierens" bug. Repetition is the disease, not the cure.
 - Write each character's name EXACTLY ONCE, at the very start of their block. After that NEVER write the name again — continue with "she" / "he", or just keep describing.
 - Keep each character's whole description CONTIGUOUS: one unbroken block, never jump back to an earlier character. The run of sentences between one name and the next IS that character — contiguity binds the features, not name repetition.
-- ONE FEATURE PER SHORT SENTENCE. ONE ADJECTIVE PER NOUN ("blonde hair", not "soft messy long blonde hair"). Plain words. About 4-8 short sentences per character.
+- ONE FEATURE PER SHORT SENTENCE. ONE ADJECTIVE PER NOUN when possible ("blonde hair", not "soft messy long blonde hair"). Plain words. Use as many short sentences as needed for full adherence, often 10-18 short sentences per main character.
 - Order the character blocks left-to-right, matching their on-screen positions.
 
 CHARACTER COUNT — many characters are fine IF each is one clean single-name block
 Anima can render several characters (even 5+) when the prompt is built right. The count is NOT the problem — name repetition and missing positions are. So:
 - Write one block per character actually in this beat. Do NOT artificially cap the number.
-- With more characters keep each block TIGHT, but never INCOMPLETE — every block still covers all the key features.
+- With more characters keep words simple, not compact. Do not make stub blocks. Every visible character still gets a full descriptive block with hair, eyes, skin, clothes, pose, expression, and important accessories.
 - The more characters, the more DISTINCT each position must be.
 - If a character is not visually in this beat, leave them out completely — do not name them at all.
 
@@ -68,16 +73,18 @@ NEVER WRITE NEGATIONS — the encoder cannot do "no", "not", "exactly", "no extr
 - DELETE sentences like "There are exactly 3 characters, no duplicate characters" and "All characters visible, no extra people, no duplicate versions". They cause the bug.
 - A short POSITIVE count at the start is the only count allowed: "Three people are in the picture." Never phrase it with no / not / only / exactly.
 
-POSITION IS MANDATORY — give every character a distinct slot, stated once in their block. The model clones a person when it does not know where to place them.
-- 1 char: "in the centre".
-- 2 chars: "on the left" / "on the right".
-- 3+: spread them — "on the far left", "left of centre", "in the centre", "right of centre", "on the far right".
-Put the slot in the FIRST words of the block: "On the left is Frieren. She is an adult elf woman. ..."
+POSITION IS MANDATORY — give every character one distinct slot, stated once in their block. The model clones a person when it does not know where to place them.
+- Use scene/VIR positions first: "behind the counter", "in front of the counter", "beside the bed", "at the doorway", "in the background", "facing away".
+- Use left/right ONLY when the prose or VIR explicitly gives left/right, or when no better physical slot exists.
+- If left/right is not explicit, DO NOT invent it. Keep the same character block order as [VIR PROMPT LOCK] / [ACTIVE VIR] order, and use physical relation words instead.
+- 1 char fallback: "in the centre". 2 char fallback: first VIR character "on the left", second "on the right". 3+ fallback: spread by VIR order.
+Put the slot in the FIRST words of the block: "Behind the counter is Hana. She is an adult human female. ..."
 For body relations use plain words: "in front of", "behind", "next to", "facing the camera", "facing away", "in the background". No "midground", no camera jargon.
 
-VERBOSITY — match the scene, but always in plain words:
-- SIMPLE (default): solo standing/sitting/walking, standard sex acts (BJ, missionary, doggy, cowgirl, riding), basic closeups. Name the act and the bodies plainly.
-- DETAILED (only when needed): 2+ contact points that matter, one body partly hidden, unusual poses. Still use plain words — just add more short sentences.
+VERBOSITY — Anima wants heavy description in simple words:
+- DEFAULT: detailed plain description. Use many short simple sentences, not compact phrases.
+- ACTIONS: describe quick visible actions plainly: who stands where, who faces whom, what each hand does, what the face does, what clothing is doing.
+- COMPLEX SCENES: add more short sentences for contact points, hidden body parts, unusual poses, and object placement. Never solve complexity with compact wording.
 
 TYPE — exactly one:
 - portrait (2:3 solo / outfit)
@@ -90,9 +97,9 @@ STRUCTURE (write inside prompt="..." as short plain sentences, in this order):
 1. "@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting."
 2. Rating, in plain words: "Safe for work." | "Suggestive, with some nudity." | "Explicit adult content showing [act]."
 3. Optional positive count: "Two people are in the picture." (positive only — never "no extra", never "exactly").
-4. Scene: where it is, the time of day, the light, and 2-3 things you can see. Short sentences.
+4. Scene: where it is, the time of day, the light, and 3-6 things you can see. Short simple sentences.
 5. Camera: shot type and angle in simple words ("close-up shot from the side", "wide shot from a low angle"). For first-person: "first-person view from {{user}}'s eyes". For a cropped view, say what is shown and what is cut off.
-6. One block per character, ordered left-to-right. Open with position + name ONCE. Then write one short sentence per VIR field, IN THIS ORDER, using "she"/"he" — NEVER the name again. Copy each field verbatim from the VIR; do not paraphrase, shorten, or invent. Skip a line only if that VIR field is genuinely empty. Never skip a non-empty field.
+6. One block per character. Order by explicit left-to-right only when the scene says it; otherwise use [VIR PROMPT LOCK] / [ACTIVE VIR] order for stable retries. Open with physical position + name ONCE. Then write many short simple sentences using "she"/"he" — NEVER the name again. Copy VIR facts exactly, but split packed facts into separate plain sentences. Do not paraphrase, shorten, or invent. Skip a line only if that VIR field is genuinely empty. Never skip a non-empty field.
    Field order (one sentence each):
    a. gender + species + age             ("She is an adult catkin female. She looks about 20.")
    b. height                             ("She is 163 cm tall.")
@@ -123,9 +130,10 @@ LOCKS:
 - SMALL FEATURES ARE WHAT DRIFTS — copy marks and face_features word for word. Scars, moles, freckles, tattoos, beauty marks, eye shape, a chipped tooth: if the VIR lists one, it MUST appear in the pic for that character every time. Rewording or dropping these is the #1 cause of a character's face changing between pics.
 - ACCESSORIES ARE THE MOST DRIFTY FIELD. The VIR accessories line is the only source of truth. If the VIR says "wire-rimmed glasses; gold hoop earrings" — both appear in every pic. If the VIR says nothing for accessories — add nothing. Never invent accessories not in the VIR (no sunglasses, no hat, no bag that wasn't there). Never drop accessories that are listed. Glasses do not appear and disappear between pics.
 - WITHIN-MESSAGE CONSISTENCY: All <pic> tags in a single reply must agree with each other. Read the VIR state once before writing. Every pic in this reply reflects that same state. Outfit, accessories, glasses, jewelry — identical across all pics unless the prose explicitly shows the character changing them. If she takes her glasses off mid-scene, every pic after that moment shows no glasses; every pic before that moment shows glasses. They do not flicker.
+- SAME-SCENE RETRY CONSISTENCY: Re-generating the same scene must not reshuffle people or rewrite their locked details. If the scene/prose did not change, keep the same character order, same positions, same outfits, same accessories, same hair, same eyes, same skin, and same camera relation. Only pose/expression/condition may change when the visible beat actually changes.
 - body_material is mandatory for non-humans — copy it verbatim from the VIR (e.g. "translucent gel, no skeleton", "living wood and bark"). Without it the model draws a plain human body.
 - If a character has NO VIR card (often {{user}}), describe them fully from their persona/character card instead — never leave them thin — but the real fix is to give that character a VIR.
-- Positioning: every character gets ONE distinct slot, stated once (far left / left / centre / right / far right).
+- Positioning: every character gets ONE distinct slot, stated once. Prefer physical scene slots over invented left/right.
 - Rear view → do not mention breasts or front. Front view → do not mention back or ass.
 - Name each character ONCE at the start of their block; inside that block use "she" / "he", never the name again.
 
