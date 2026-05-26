@@ -9,6 +9,10 @@ import {
     eventSource,
     event_types,
     updateMessageBlock,
+    extension_prompt_types,
+    extension_prompt_roles,
+    chat_metadata,
+    saveMetadata,
 } from '../../../../script.js';
 import { appendMediaToMessage } from '../../../../script.js';
 import { regexFromString } from '../../../utils.js';
@@ -65,14 +69,24 @@ const defaultSettings = {
         // (e.g. "ETSVin's shirt" became "ETSVin"). This pattern fires both branches
         // and the first non-empty capture group wins.
         regex: '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/g',
-        position: 'deep_system', // deep_system, deep_user, deep_assistant
-        depth: 0, // 0 = append at end (safe; after preset). >0 = N from end.
+        position: 'deep_user', // legacy UI field; runtime forces user-role injection
+        depth: 0, // 0 = absolute final slot. >0 = N positions earlier from the end.
     },
     queueConcurrency: 1,
     generationDelayMs: 0,
     skipStreamingPregeneration: false,
     debug: false,
     resolutionProfile: 'custom',
+    // v1.5 quality + safety settings
+    negativePrompt: 'duplicate, watermark, text, lowres, blurry, deformed hands, extra limbs, multiple heads, jpeg artifacts',
+    qualityPrefix: '@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting.',
+    qualityPrefixAuto: true,   // auto-prepend qualityPrefix if missing from the prompt
+    sanitizePrompts: true,     // strip SD weight syntax, negations, URLs, fancy quotes
+    virDriftWarn: false,       // warn when a VIR character is named without appearance terms
+    enableDedupe: true,        // same prompt+type twice in one reply → one gen, two embeds
+    allowFallbackTagInsertion: false,
+    loraTriggers: {},          // map<characterName, triggerString>; prepended when name found in prompt
+    lastPicAudit: {},
 };
 
 const RESOLUTION_PROFILES = {
@@ -120,6 +134,24 @@ function debugLog(...args) {
     }
 }
 
+// ── Per-chat disable ────────────────────────────────────────────────────────
+// When set in the current chat's metadata, this chat skips:
+//   - the pic-tag prompt injection (main + any reminder slot)
+//   - streaming pre-generation
+//   - the MESSAGE_RECEIVED final-pass image generation
+// Other chats are unaffected. Stored in chat_metadata so it survives reload.
+const CHAT_DISABLED_KEY = 'imageAutoChatDisabled';
+
+function isChatDisabled() {
+    return Boolean(chat_metadata?.[CHAT_DISABLED_KEY]);
+}
+
+function setChatDisabled(disabled) {
+    if (disabled) chat_metadata[CHAT_DISABLED_KEY] = true;
+    else delete chat_metadata[CHAT_DISABLED_KEY];
+    try { saveMetadata?.(); } catch (err) { console.warn(`[${extensionName}] saveMetadata failed`, err); }
+}
+
 function normalizePromptKey(prompt) {
     return String(prompt || '').replace(/\s+/g, ' ').trim();
 }
@@ -159,6 +191,166 @@ function getCharacterSDPrefix() {
     if (!char?.avatar) return '';
     const key = char.avatar.replace(/\.[^/.]+$/, '');
     return (sdSettings.character_prompts[key] || '').trim();
+}
+
+// ── v1.5 prompt transforms ──────────────────────────────────────────────────
+// Order at /sd call time:
+//   raw prompt → sanitizeForAnimaQwen → ensureQualityPrefix → applyLoraTriggers
+//                → prepend char SD prefix → call /sd with negative=
+// Sanitize first so weight-syntax / negations are gone before the quality
+// prefix scan, otherwise dedupe of the prefix can miss because of (xxx:1.2)
+// noise interleaved with the prefix text.
+
+const NEG_WORD_RE = /\b(?:no|not|without|never|avoid|exactly|only)\b\s+[\w'’-]+(?:\s+[\w'’-]+){0,4}/gi;
+const SD_WEIGHT_PAREN_RE = /\(([^()]*?):\s*-?\d+(?:\.\d+)?\s*\)/g;
+const SD_WEIGHT_BRACKET_RE = /\[([^\[\]]*?):\s*-?\d+(?:\.\d+)?\s*\]/g;
+const GEN_PARAM_RE = /\b(?:width|height|steps|seed|cfg|sampler|model|negative[_ ]?prompt|variant)\s*[:=]\s*\S+/gi;
+
+function sanitizeForAnimaQwen(prompt) {
+    const cfg = extension_settings[extensionName] || {};
+    if (cfg.sanitizePrompts === false) return String(prompt || '').trim();
+    let text = String(prompt || '');
+    if (!text) return '';
+
+    // 1) URLs (would otherwise paint themselves as text into the image)
+    text = text.replace(/https?:\/\/\S+/gi, ' ');
+    // 2) SD weight syntax — keep the inner word, drop the multiplier
+    text = text.replace(SD_WEIGHT_PAREN_RE, '$1').replace(SD_WEIGHT_BRACKET_RE, '$1');
+    // 3) Generation params accidentally embedded
+    text = text.replace(GEN_PARAM_RE, ' ');
+    // 4) Fancy quotes → straight; collapse straight doubles to singles
+    text = text.replace(/[“”]/g, "'").replace(/"/g, "'");
+    // 5) Negation phrases — Qwen paints the noun, so "no extra people" → extra people
+    const negMatches = text.match(NEG_WORD_RE);
+    if (negMatches?.length) {
+        debugLog(`[${extensionName}] sanitizer stripped ${negMatches.length} negation phrase(s):`, negMatches);
+        text = text.replace(NEG_WORD_RE, ' ');
+    }
+    // 6) Standalone problem descriptors that cause artifacts
+    text = text.replace(/\b(duplicate|duplicates|multiple\s+heads|extra\s+\w+)\b/gi, ' ');
+    // 7) Whitespace / dangling punctuation cleanup
+    text = text.replace(/\s+([.,;:!?])/g, '$1')
+               .replace(/[.,;:]\s*([.,;:])/g, '$1')
+               .replace(/\s+/g, ' ')
+               .trim();
+    // 8) Length cap (Qwen tops out ~512 tokens — generous char cap leaves headroom)
+    if (text.length > 1800) {
+        const cut = text.lastIndexOf(' ', 1800);
+        text = (cut > 1500 ? text.slice(0, cut) : text.slice(0, 1800)).trim();
+    }
+    return text;
+}
+
+function ensureQualityPrefix(prompt) {
+    const cfg = extension_settings[extensionName] || {};
+    if (!cfg.qualityPrefixAuto) return prompt;
+    const prefix = String(cfg.qualityPrefix || '').trim();
+    if (!prefix) return prompt;
+    // Cheap match: first ~80 chars contain the prefix verbatim or the @xlvxp tag
+    const head = String(prompt || '').slice(0, Math.max(prefix.length + 40, 120)).toLowerCase();
+    const pfxLower = prefix.toLowerCase();
+    if (head.includes(pfxLower)) return prompt;
+    // Detect a duplicate-with-trailing-dot variant (prompt re-emits same prefix without period)
+    const pfxNoDot = pfxLower.replace(/\.+$/, '');
+    if (pfxNoDot && head.includes(pfxNoDot)) return prompt;
+    return `${prefix} ${String(prompt || '').trim()}`.trim();
+}
+
+function applyLoraTriggers(prompt) {
+    const cfg = extension_settings[extensionName] || {};
+    const map = cfg.loraTriggers || {};
+    const names = Object.keys(map);
+    if (!names.length) return prompt;
+    const body = String(prompt || '');
+    const lc = body.toLowerCase();
+    const triggers = [];
+    for (const name of names) {
+        const trig = String(map[name] || '').trim();
+        if (!trig) continue;
+        const needle = String(name || '').toLowerCase().trim();
+        if (!needle) continue;
+        // Case-insensitive whole-word-ish match (allow trailing 's' or punctuation)
+        const re = new RegExp(`\\b${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        if (re.test(lc) && !body.includes(trig)) triggers.push(trig);
+    }
+    if (!triggers.length) return body;
+    return `${triggers.join(' ')} ${body}`.trim();
+}
+
+async function warnVirDrift(prompt) {
+    const cfg = extension_settings[extensionName] || {};
+    if (!cfg.virDriftWarn) return;
+    if (typeof window.ff4VirGetPicCopies !== 'function') return;
+    try {
+        const all = await window.ff4VirGetPicCopies();
+        const lc = String(prompt || '').toLowerCase();
+        const APPEARANCE_RE = /\b(hair|eyes|skin|wears|wearing|naked|tall|short|build|body|fur|scales)\b/i;
+        for (const [, value] of Object.entries(all || {})) {
+            const name = String(value?.name || '').toLowerCase().trim();
+            if (!name || name.length < 3) continue;
+            if (!lc.includes(name)) continue;
+            // Check 120 chars around the name mention for appearance terms
+            const idx = lc.indexOf(name);
+            const window = lc.slice(Math.max(0, idx - 60), idx + name.length + 120);
+            if (!APPEARANCE_RE.test(window)) {
+                console.warn(`[${extensionName}] VIR drift: "${value?.name}" named without appearance terms — model may drift.`);
+            }
+        }
+    } catch (err) {
+        debugLog('warnVirDrift failed', err?.message);
+    }
+}
+
+// Compose the final SD prompt from the AI's raw prompt text.
+function buildEffectivePrompt(rawPrompt) {
+    let p = sanitizeForAnimaQwen(rawPrompt);
+    p = ensureQualityPrefix(p);
+    p = applyLoraTriggers(p);
+    p = normalizePromptPeopleCount(p);
+    const charPrefix = getCharacterSDPrefix();
+    if (charPrefix) p = `${charPrefix}, ${p}`;
+    return p;
+}
+
+function normalizePromptPeopleCount(prompt) {
+    const text = String(prompt || '').trim();
+    if (!text) return text;
+
+    const countPattern = /\b(?:one|two|three|four|five|six|seven|eight|nine|\d+)\s+people?\s+(?:is|are)\s+in the picture\./i;
+    if (!countPattern.test(text)) return text;
+
+    const names = new Set();
+    const addName = (value) => {
+        const name = String(value || '').trim().replace(/\s+/g, ' ');
+        if (name.length >= 2) names.add(name);
+    };
+
+    for (const match of text.matchAll(/\b([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,4})\s+from\s+[A-Z]/g)) {
+        addName(match[1]);
+    }
+    for (const match of text.matchAll(/\b([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,4}),\s+an original character\b/g)) {
+        addName(match[1]);
+    }
+
+    const count = names.size;
+    if (count < 1) return text;
+
+    const countWord = {
+        1: 'One',
+        2: 'Two',
+        3: 'Three',
+        4: 'Four',
+        5: 'Five',
+        6: 'Six',
+        7: 'Seven',
+        8: 'Eight',
+        9: 'Nine',
+    }[count] || String(count);
+
+    return text.replace(
+        countPattern,
+        `${countWord} ${count === 1 ? 'person is' : 'people are'} in the picture.`,
+    );
 }
 
 // Extract the type attribute value from a full <pic ...> tag string
@@ -219,6 +411,7 @@ function updateUI() {
         $('#prompt_injection_position').val(
             extension_settings[extensionName].promptInjection.position,
         );
+        $('#prompt_injection_position').prop('disabled', true);
         $('#prompt_injection_depth').val(
             extension_settings[extensionName].promptInjection.depth,
         );
@@ -251,21 +444,36 @@ function updateUI() {
             'checked',
             Boolean(extension_settings[extensionName].debug),
         );
+        // v1.5 quality + safety fields
+        const cfgUi = extension_settings[extensionName] || {};
+        // qualityPrefix / qualityPrefixAuto / negativePrompt / sanitizePrompts UI removed —
+        // values still apply at defaults; edit in settings JSON if needed.
+        $('#image_generation_dedupe').prop('checked', cfgUi.enableDedupe !== false);
+        $('#image_generation_vir_drift').prop('checked', Boolean(cfgUi.virDriftWarn));
+        try {
+            $('#image_generation_lora_triggers').val(JSON.stringify(cfgUi.loraTriggers || {}, null, 2));
+        } catch { $('#image_generation_lora_triggers').val('{}'); }
+        // Per-chat fields — read from chat_metadata, not from extension_settings.
+        // CHAT_CHANGED already triggers updateUI() so the checkbox reloads on chat switch.
+        $('#image_generation_chat_disabled').prop('checked', isChatDisabled());
     }
 }
 
 // 加载设置
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
+    let settingsChanged = false;
 
     // 如果设置为空或缺少必要属性，使用默认设置
     if (Object.keys(extension_settings[extensionName]).length === 0) {
         Object.assign(extension_settings[extensionName], JSON.parse(JSON.stringify(defaultSettings)));
+        settingsChanged = true;
     } else {
         // 确保promptInjection对象存在
         if (!extension_settings[extensionName].promptInjection) {
             extension_settings[extensionName].promptInjection =
                 defaultSettings.promptInjection;
+            settingsChanged = true;
         } else {
             // 确保promptInjection的所有子属性都存在
             const defaultPromptInjection = defaultSettings.promptInjection;
@@ -276,6 +484,7 @@ async function loadSettings() {
                 ) {
                     extension_settings[extensionName].promptInjection[key] =
                         defaultPromptInjection[key];
+                    settingsChanged = true;
                 }
             }
         }
@@ -284,6 +493,56 @@ async function loadSettings() {
         if (extension_settings[extensionName].insertType === undefined) {
             extension_settings[extensionName].insertType =
                 defaultSettings.insertType;
+            settingsChanged = true;
+        }
+        if (extension_settings[extensionName].promptInjection.position !== 'deep_user') {
+            extension_settings[extensionName].promptInjection.position = 'deep_user';
+            settingsChanged = true;
+        }
+        if (!Number.isFinite(Number(extension_settings[extensionName].promptInjection.depth))) {
+            extension_settings[extensionName].promptInjection.depth = 0;
+            settingsChanged = true;
+        }
+
+        // Auto-migrate previous bundled prompt contracts to the current
+        // strengthened anchor-based version. This updates installs that still
+        // have an older default prompt saved in settings.json.
+        const currentPrompt = String(
+            extension_settings[extensionName].promptInjection.prompt || '',
+        );
+        const verbosePromptMarkers = [
+            '[NAME-ONCE / CONTIGUOUS BLOCK / POSITION]',
+            'ONE BLOCK PER CHARACTER, left-to-right',
+            'Within the pic prompt: did you name each character ONCE only?',
+        ];
+        const priorPromptMarkers = [
+            '[ANIMA PROMPT STYLE]',
+            'Write Circle Labs Anima prompts in compact natural language.',
+            'Write Circle Labs Anima prompts in clear natural language with rich concrete detail.',
+            'ACTIVE VIR is the source for identity anchors.',
+            'PIC COPY is the strongest identity source.',
+        ];
+        const usesOutdatedCurrentBundledPrompt =
+            currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
+            && (
+                !currentPrompt.includes('[SPATIAL CONSISTENCY RULES]')
+                || !currentPrompt.includes('Do not write field labels or schema-like fragments inside the pic prompt.')
+                || !currentPrompt.includes('Sexual context does not imply undressing.')
+                || !currentPrompt.includes('Skin description is mandatory.')
+            );
+        const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
+            currentPrompt.includes(marker),
+        );
+        const usesOlderBundledPrompt = priorPromptMarkers.some((marker) =>
+            currentPrompt.includes(marker),
+        ) && !currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]');
+        if (usesLegacyVerbosePrompt || usesOlderBundledPrompt || usesOutdatedCurrentBundledPrompt) {
+            extension_settings[extensionName].promptInjection.prompt =
+                defaultSettings.promptInjection.prompt;
+            settingsChanged = true;
+            console.log(
+                `[${extensionName}] Auto-migrated older bundled Anima prompt to detailed VIR-driven contract.`,
+            );
         }
 
         // Auto-migrate broken/legacy pic-tag regexes to the current quote-aware default.
@@ -297,6 +556,7 @@ async function loadSettings() {
         ];
         if (legacyPicRegexes.includes(extension_settings[extensionName].promptInjection.regex)) {
             extension_settings[extensionName].promptInjection.regex = defaultSettings.promptInjection.regex;
+            settingsChanged = true;
             console.log('[' + extensionName + '] Auto-migrated legacy pic-tag regex to quote-aware version (fixes apostrophe truncation).');
         }
 
@@ -304,12 +564,14 @@ async function loadSettings() {
         if (!extension_settings[extensionName].resolutionPresets) {
             extension_settings[extensionName].resolutionPresets =
                 JSON.parse(JSON.stringify(defaultSettings.resolutionPresets));
+            settingsChanged = true;
         } else {
             // Ensure all default types are present
             for (const type in defaultSettings.resolutionPresets) {
                 if (!extension_settings[extensionName].resolutionPresets[type]) {
                     extension_settings[extensionName].resolutionPresets[type] =
                         { ...defaultSettings.resolutionPresets[type] };
+                    settingsChanged = true;
                 }
             }
         }
@@ -317,13 +579,23 @@ async function loadSettings() {
         // Migrate: add defaultType if missing
         if (extension_settings[extensionName].defaultType === undefined) {
             extension_settings[extensionName].defaultType = defaultSettings.defaultType;
+            settingsChanged = true;
         }
 
-        for (const key of ['queueConcurrency', 'generationDelayMs', 'skipStreamingPregeneration', 'debug', 'resolutionProfile']) {
+        for (const key of [
+            'queueConcurrency', 'generationDelayMs', 'skipStreamingPregeneration', 'debug', 'resolutionProfile',
+            'negativePrompt', 'qualityPrefix', 'qualityPrefixAuto', 'sanitizePrompts', 'virDriftWarn', 'enableDedupe', 'allowFallbackTagInsertion', 'loraTriggers', 'lastPicAudit',
+        ]) {
             if (extension_settings[extensionName][key] === undefined) {
-                extension_settings[extensionName][key] = defaultSettings[key];
+                const def = defaultSettings[key];
+                extension_settings[extensionName][key] = (def && typeof def === 'object') ? JSON.parse(JSON.stringify(def)) : def;
+                settingsChanged = true;
             }
         }
+    }
+
+    if (settingsChanged) {
+        saveSettingsDebounced();
     }
 
     updateUI();
@@ -426,6 +698,48 @@ async function createSettings(settingsHtml) {
     $('#image_generation_debug').on('change', function () {
         extension_settings[extensionName].debug = $(this).prop('checked');
         saveSettingsDebounced();
+    });
+
+    // ── Per-chat disable handler ────────────────────────────────────────────
+    $('#image_generation_chat_disabled').on('change', function () {
+        const checked = $(this).prop('checked');
+        setChatDisabled(checked);
+        // Re-evaluate injection state immediately so the rule blob is cleared/restored without
+        // waiting for the next CHAT_CHANGED. Other chats are not touched.
+        try { refreshImagePromptInjection(); } catch { /* ignore */ }
+        toastr[checked ? 'warning' : 'info'](checked
+            ? 'Image auto-generation DISABLED for this chat (pic injection + auto gen skipped).'
+            : 'Image auto-generation re-enabled for this chat.');
+    });
+
+    // qualityPrefix / qualityPrefixAuto / negativePrompt / sanitizePrompts handlers removed —
+    // those settings keep their stored values (or defaults), they're just no longer user-tunable from the panel.
+    $('#image_generation_dedupe').on('change', function () {
+        extension_settings[extensionName].enableDedupe = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#image_generation_vir_drift').on('change', function () {
+        extension_settings[extensionName].virDriftWarn = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#image_generation_lora_triggers').on('change blur', function () {
+        const raw = String($(this).val() || '').trim();
+        if (!raw) {
+            extension_settings[extensionName].loraTriggers = {};
+            saveSettingsDebounced();
+            return;
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                throw new Error('Must be a JSON object: { "Name": "trigger" }');
+            }
+            extension_settings[extensionName].loraTriggers = parsed;
+            saveSettingsDebounced();
+            toastr.success(`LoRA triggers saved (${Object.keys(parsed).length} entr${Object.keys(parsed).length === 1 ? 'y' : 'ies'}).`);
+        } catch (err) {
+            toastr.error(`LoRA triggers JSON error: ${err.message || err}`);
+        }
     });
 
     $('#image_generation_reset_regex').on('click', function () {
@@ -568,17 +882,15 @@ function getMesRole() {
     }
 }
 
-// Inject pic-tag emission rules at IN_CHAT depth 1 — one position before the
-// latest user message — so they are the freshest operating instruction the AI
-// sees before generating.
-//
+// Inject the FULL pic-tag contract as the absolute final in-chat prompt.
 // IMPORTANT: we inject with the 'user' role, NOT 'system'. Many presets enable
 // squash_system_messages, which merges every system-role injection into one
-// blob and reorders it — that buries this injection near the top of the prompt
-// and destroys its depth-1 recency. A 'user'-role message is never squashed,
-// so it stays exactly at depth 1, right before generation, on every preset.
+// blob and reorders it — that buries this injection near the top of the prompt.
+// A 'user'-role message is never squashed, so it stays at the final recency
+// slot on every preset when depth=0.
 const IMAGE_PROMPT_KEY = 'ST_IMAGE_AUTO_GEN';
-const IMAGE_PROMPT_POSITION = 2; // IN_CHAT
+const IMAGE_PROMPT_POSITION = extension_prompt_types.IN_CHAT;
+const LEGACY_PIC_PRIORITY_KEY = 'ST_IMAGE_PIC_PRIORITY';
 function refreshImagePromptInjection() {
     try {
         const ctx = getContext();
@@ -589,75 +901,31 @@ function refreshImagePromptInjection() {
             !cfg ||
             !cfg.promptInjection ||
             !cfg.promptInjection.enabled ||
-            cfg.insertType === INSERT_TYPE.DISABLED;
+            cfg.insertType === INSERT_TYPE.DISABLED ||
+            isChatDisabled();
         const userDepth = Number(cfg?.promptInjection?.depth);
-        const depth = Number.isFinite(userDepth) && userDepth > 0 ? userDepth : 1;
+        const depth = Number.isFinite(userDepth) && userDepth >= 0 ? userDepth : 0;
         if (disabled) {
             setExtPrompt(IMAGE_PROMPT_KEY, '', IMAGE_PROMPT_POSITION, depth);
+            setExtPrompt(LEGACY_PIC_PRIORITY_KEY, '', IMAGE_PROMPT_POSITION, 0);
             return;
         }
         const prompt = cfg.promptInjection.prompt || '';
         // Force 'user' role so squash_system_messages can't merge-and-bury it.
-        // (getMesRole() returns 'system' by default, which gets squashed.)
-        const role = 'user';
+        const role = extension_prompt_roles.USER;
+        // Clear the retired reminder slot in case an earlier session injected it.
+        setExtPrompt(LEGACY_PIC_PRIORITY_KEY, '', IMAGE_PROMPT_POSITION, 0);
         setExtPrompt(IMAGE_PROMPT_KEY, prompt, IMAGE_PROMPT_POSITION, depth, false, role);
         debugLog(`[${extensionName}] prompt injected IN_CHAT depth ${depth}, role=${role} (squash-proof)`);
     } catch (err) {
         console.error(`[${extensionName}] failed to register prompt`, err);
     }
 }
-// ── v1.4 Anti-skip: depth-1 escalating priority reminder ─────────────────────
-// Pattern matches ff4-vir v5.4.0. Tracks consecutive turns where AI emits no
-// <pic> tag despite substantive prose (likely visual beat present). When
-// misses accumulate, a stronger reminder fires at depth 1 (fresher than the
-// main prompt at depth 0).
-const PIC_PRIORITY_KEY = 'ST_IMAGE_PIC_PRIORITY';
-const PIC_PRIORITY_POSITION = 2; // IN_CHAT
-const PIC_PRIORITY_DEPTH = 1;
 function getMissCounter() {
     const cfg = extension_settings[extensionName] || {};
     if (typeof cfg.consecutivePicMisses !== 'number') cfg.consecutivePicMisses = 0;
     if (typeof cfg.totalPicMisses !== 'number') cfg.totalPicMisses = 0;
     return cfg;
-}
-function buildPicPriorityReminder() {
-    const cfg = getMissCounter();
-    const misses = Math.max(0, cfg.consecutivePicMisses || 0);
-    // Always-present anti-deliberation header — bypasses provider's agentic
-    // "draft-and-verify" training that bloats thinking models like Kimi K2.6.
-    const ANTI_AGENT = `[REASONING MODE: single-pass RP, not agent verify-loop. Apply rules silently — no rule-citation in reasoning, no draft-then-revise.]`;
-    if (misses === 0) {
-        return `${ANTI_AGENT}
-[PIC REMINDER] If anything visual happens this turn (movement, expression, pose, undress, sex-act), emit at least one literal <pic prompt="..." type="..."> tag inline at that beat in the FINAL visible reply. Pic tags in <think>/reasoning do NOT count.`;
-    }
-    if (misses === 1) {
-        return `${ANTI_AGENT}
-[PIC PRIORITY — your previous reply emitted NO <pic> tag despite having a visual beat. That is malformed.
-EVERY reply with any movement/expression-change/pose-shift/undress/sex-act MUST include at least one literal <pic prompt="..." type="..."> tag IN THE FINAL VISIBLE REPLY (not <think>, not reasoning).
-Use the existing pic prompt rules: name each character ONCE, copy VIR fields verbatim, give each character one distinct position slot.
-[END PIC PRIORITY]`;
-    }
-    return `${ANTI_AGENT}
-[PIC PRIORITY — CRITICAL: your last ${misses} replies have skipped <pic> tags. Visual continuity is broken — the chat has no images for entire scenes.
-FIX NOW: this reply MUST include at least one literal <pic prompt="..." type="..."> tag in the final visible message text. NOT inside <think>. NOT inside reasoning blocks. NOT inside <details>. As an actual literal HTML-style tag in the prose.
-Format: <pic prompt="@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting. <rating>. <scene>. <camera>. <character blocks copied verbatim from VIR>. <interaction>." type="portrait|closeup|scene|landscape|square">
-If a visual beat happens (almost every roleplay turn), a reply WITHOUT a <pic> tag is REJECTED. Emit the tag.
-[END PIC PRIORITY]`;
-}
-function refreshPicPriorityInjection() {
-    try {
-        const ctx = getContext();
-        const setExtPrompt = ctx?.setExtensionPrompt || window.setExtensionPrompt;
-        if (typeof setExtPrompt !== 'function') return;
-        const cfg = extension_settings[extensionName];
-        const disabled = !cfg || !cfg.promptInjection || !cfg.promptInjection.enabled || cfg.insertType === INSERT_TYPE.DISABLED;
-        if (disabled) {
-            setExtPrompt(PIC_PRIORITY_KEY, '', PIC_PRIORITY_POSITION, PIC_PRIORITY_DEPTH);
-            return;
-        }
-        setExtPrompt(PIC_PRIORITY_KEY, buildPicPriorityReminder(), PIC_PRIORITY_POSITION, PIC_PRIORITY_DEPTH, false, 'user');
-        debugLog(`[${extensionName}] pic-priority injected at depth ${PIC_PRIORITY_DEPTH} (misses=${cfg.consecutivePicMisses||0})`);
-    } catch(e) { console.warn(`[${extensionName}] pic-priority injection failed`, e); }
 }
 
 // Hook GENERATION_ENDED to count misses (substantive reply with no pic tag = miss).
@@ -698,15 +966,14 @@ eventSource.on(event_types.GENERATION_ENDED, () => {
         }
         const ctx2 = getContext();
         ctx2?.saveSettingsDebounced?.();
-        refreshPicPriorityInjection();
     } catch(e) { console.warn(`[${extensionName}] miss tracking failed`, e); }
 });
 
 // Initial registration + refresh hooks. The Prompt Manager reads its
 // collection at generation time, so we only need to keep our entry up to date.
-eventSource.on(event_types.APP_READY, () => { refreshImagePromptInjection(); refreshPicPriorityInjection(); });
-eventSource.on(event_types.CHAT_CHANGED, () => { refreshImagePromptInjection(); refreshPicPriorityInjection(); });
-eventSource.on(event_types.SETTINGS_UPDATED, () => { refreshImagePromptInjection(); refreshPicPriorityInjection(); });
+eventSource.on(event_types.APP_READY, () => { refreshImagePromptInjection(); });
+eventSource.on(event_types.CHAT_CHANGED, () => { refreshImagePromptInjection(); });
+eventSource.on(event_types.SETTINGS_UPDATED, () => { refreshImagePromptInjection(); });
 window.stImageAutoGenTracker = window.stImageAutoGenTracker || new Map();
 window.stImageAutoGenStatuses = window.stImageAutoGenStatuses || new Map();
 // Sequential generation queue — prevents flooding ComfyUI with parallel requests
@@ -715,7 +982,15 @@ window.stImageGenQueue = window.stImageGenQueue || [];
 window.stImageGenRunning = window.stImageGenRunning || false;
 
 function makeImageJobKey(messageId, picIndex, prompt, imageType) {
-    return `${messageId}:${picIndex}:${imageType || 'default'}:${normalizePromptKey(prompt)}`;
+    // When dedupe is on, two pic tags with the same normalized prompt+type in the
+    // same message share a key → tracker.get() returns the same promise → one /sd
+    // call, two embeds. When off, each pic gets a unique key by picIndex.
+    const dedupe = extension_settings[extensionName]?.enableDedupe !== false;
+    const typePart = imageType || 'default';
+    const normalized = normalizePromptKey(prompt);
+    return dedupe
+        ? `${messageId}:${typePart}:${normalized}`
+        : `${messageId}:${picIndex}:${typePart}:${normalized}`;
 }
 
 function setImageJobStatus(key, status) {
@@ -746,18 +1021,21 @@ async function runQueuedGeneration({ key, prompt, insertType, imageType, resolve
             throw new Error('No image generation slash command is available');
         }
         const dims = resolveResolution(imageType);
-        const charPrefix = getCharacterSDPrefix();
-        const effectivePrompt = charPrefix ? `${charPrefix}, ${prompt}` : prompt;
-        const promise = command.callback(
-            {
-                quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true',
-                processing: 'minimal',
-                extend: 'false',
-                width: String(dims.width),
-                height: String(dims.height),
-            },
-            effectivePrompt
-        );
+        const effectivePrompt = buildEffectivePrompt(prompt);
+        // Optional VIR drift warning (fire-and-forget, doesn't block the gen)
+        warnVirDrift(effectivePrompt);
+        const cfg = extension_settings[extensionName] || {};
+        const negative = String(cfg.negativePrompt || '').trim();
+        const cmdArgs = {
+            quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true',
+            processing: 'minimal',
+            extend: 'false',
+            width: String(dims.width),
+            height: String(dims.height),
+        };
+        if (negative) cmdArgs.negative = negative;
+        debugLog('runQueuedGeneration', { key, dims, hasNegative: !!negative, effectiveLen: effectivePrompt.length });
+        const promise = command.callback(cmdArgs, effectivePrompt);
         const imageUrl = await promise;
         setImageJobStatus(key, imageUrl ? 'done' : 'failed');
         resolvePromise?.(imageUrl || null);
@@ -777,6 +1055,8 @@ function clearPendingQueue() {
 
 eventSource.on(event_types.MESSAGE_SWIPED, clearPendingQueue);
 eventSource.on(event_types.CHAT_CHANGED, clearPendingQueue);
+// Refresh extension UI when switching chats.
+eventSource.on(event_types.CHAT_CHANGED, () => { try { updateUI(); } catch { /* ignore */ } });
 
 function collectValidPicMatches(matches) {
     return (matches || [])
@@ -805,6 +1085,396 @@ function collectValidPicMatches(matches) {
 // (right after the block) before extraction. The pic then generates AND is
 // visible, regardless of where the model placed it. The rest of the reasoning
 // stays in <think> and is display-stripped normally.
+const BEAT_VISUAL_HINTS = [
+    'look', 'glance', 'gaze', 'smile', 'grin', 'blush', 'stare', 'expression',
+    'stand', 'standing', 'sit', 'sitting', 'kneel', 'kneeling', 'lean', 'turn',
+    'step', 'walk', 'enter', 'leave', 'reach', 'lift', 'pin', 'pull', 'push',
+    'grab', 'hold', 'press', 'touch', 'kiss', 'hug', 'embrace', 'straddle',
+    'undress', 'dress', 'robe', 'shirt', 'skirt', 'stockings', 'heels', 'bra',
+    'panties', 'bed', 'chair', 'door', 'mirror', 'window', 'room', 'light',
+    'thrust', 'ride', 'lap', 'cuddle', 'moan', 'pant', 'nipples', 'breasts',
+    'cock', 'pussy', 'anal', 'oral', 'cum', 'nude', 'topless',
+];
+const CLOSEUP_HINTS = ['face', 'cheek', 'eyes', 'lips', 'kiss', 'whisper', 'blush', 'close', 'chin', 'breath'];
+const LANDSCAPE_HINTS = ['hall', 'street', 'forest', 'garden', 'beach', 'city', 'mountain', 'sky', 'wide', 'landscape'];
+const SCENE_HINTS = ['together', 'between', 'behind', 'in front of', 'against', 'holding', 'grabbing', 'thrust', 'ride', 'straddle', 'kiss'];
+const EXPLICIT_HINTS = ['sex', 'thrust', 'cock', 'pussy', 'anal', 'oral', 'nipple', 'nipples', 'cum', 'penetrat', 'fuck', 'ride'];
+const SUGGESTIVE_HINTS = ['nude', 'topless', 'shirtless', 'undress', 'robe', 'lingerie', 'stockings', 'bra', 'panties', 'kiss'];
+const LOCATION_HINTS = ['room', 'bedroom', 'living room', 'cottage', 'fire', 'hearth', 'floor', 'rug', 'bed', 'wall', 'window', 'door', 'doorway', 'mirror', 'lake', 'forest', 'street', 'hall', 'garden', 'beach'];
+const SPATIAL_HINTS = ['foreground', 'background', 'behind', 'in front of', 'beside', 'near', 'against', 'on his lap', 'on her lap', 'in his lap', 'in her lap', 'facing', 'watching', 'standing', 'kneeling', 'sitting', 'lying', 'straddling', 'curled', 'by the fire', 'at the wall', 'on the floor'];
+const BODY_PART_HINTS = ['breasts', 'chest', 'thighs', 'hips', 'ass', 'waist', 'lips', 'mouth', 'cock', 'pussy', 'skin', 'nipples'];
+
+function ensureGlobalRegex(regex) {
+    if (!(regex instanceof RegExp)) return /$a/;
+    if (regex.global) return regex;
+    const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
+    return new RegExp(regex.source, flags);
+}
+
+function escapePromptAttributeValue(value) {
+    return String(value || '')
+        .replace(/\r?\n+/g, ' ')
+        .replace(/"/g, '\'')
+        .replace(/[<>]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function maskRanges(text, regexes) {
+    let masked = String(text || '');
+    for (const regex of regexes) {
+        const globalRegex = ensureGlobalRegex(regex);
+        masked = masked.replace(globalRegex, (match) => ' '.repeat(match.length));
+    }
+    return masked;
+}
+
+function scoreBeatChunk(text) {
+    const lc = String(text || '').toLowerCase();
+    let score = 0;
+    for (const hint of BEAT_VISUAL_HINTS) {
+        if (lc.includes(hint)) score++;
+    }
+    if (/".+?"/.test(text)) score += 1;
+    if (/\*[^*]+\*/.test(text)) score += 1;
+    if (text.length > 80) score += 1;
+    return score;
+}
+
+function collectBeatChunks(text) {
+    const chunks = [];
+    const chunkRegex = /"[^"\n]+"|\*[^*\n]+\*|[^.!?\n][^.!?\n]*(?:[.!?]+|$)/g;
+    for (const match of String(text || '').matchAll(chunkRegex)) {
+        const value = String(match[0] || '').trim();
+        if (value.length < 10) continue;
+        chunks.push({
+            text: value,
+            start: match.index ?? 0,
+            end: (match.index ?? 0) + match[0].length,
+            score: scoreBeatChunk(value),
+        });
+    }
+    return chunks;
+}
+
+function detectExpectedBeatCount(text) {
+    const chunks = collectBeatChunks(text);
+    if (!chunks.length) {
+        const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
+        return words >= 8 ? 1 : 0;
+    }
+    const strong = chunks.filter((chunk) => chunk.score > 0).length;
+    if (strong <= 1) return 1;
+    if (strong === 2) return 2;
+    return Math.min(4, strong);
+}
+
+function chooseBeatChunks(chunks, targetCount) {
+    if (!chunks.length || targetCount <= 0) return [];
+    const selected = [];
+    const beaty = chunks.filter((chunk) => chunk.score > 0);
+    for (const chunk of beaty) {
+        if (selected.length >= targetCount) break;
+        selected.push(chunk);
+    }
+    if (!selected.length) selected.push(chunks[0]);
+    let i = 0;
+    while (selected.length < targetCount && i < chunks.length) {
+        const chunk = chunks[i++];
+        if (!selected.some((picked) => picked.start === chunk.start && picked.end === chunk.end)) {
+            selected.push(chunk);
+        }
+    }
+    return selected.sort((a, b) => a.start - b.start);
+}
+
+function inferImageTypeFromBeat(text, activeCount) {
+    const lc = String(text || '').toLowerCase();
+    if (CLOSEUP_HINTS.some((hint) => lc.includes(hint))) return 'closeup';
+    if (activeCount > 1 || SCENE_HINTS.some((hint) => lc.includes(hint))) return 'scene';
+    if (LANDSCAPE_HINTS.some((hint) => lc.includes(hint))) return 'landscape';
+    if (activeCount === 1) return 'portrait';
+    return extension_settings[extensionName]?.defaultType || 'square';
+}
+
+function inferRatingSentence(...texts) {
+    const lc = texts.flat().map((text) => String(text || '')).join(' ').toLowerCase();
+    if (EXPLICIT_HINTS.some((hint) => lc.includes(hint))) return 'Explicit adult content showing a sexual act.';
+    if (SUGGESTIVE_HINTS.some((hint) => lc.includes(hint))) return 'Suggestive, with some nudity.';
+    return 'Safe for work.';
+}
+
+function summarizeBeatText(text, maxLen = 220) {
+    let value = String(text || '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (value.length > maxLen) {
+        const cut = value.lastIndexOf(' ', maxLen);
+        value = value.slice(0, cut > 80 ? cut : maxLen).trim();
+    }
+    return value;
+}
+
+function splitPromptSentences(text) {
+    return String(text || '')
+        .split(/(?<=[.!?])\s+/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
+function isSpatialSentence(text) {
+    const lc = String(text || '').toLowerCase();
+    return LOCATION_HINTS.some((hint) => lc.includes(hint)) || SPATIAL_HINTS.some((hint) => lc.includes(hint));
+}
+
+function isBodyPartOnlySentence(text) {
+    const lc = String(text || '').toLowerCase();
+    return BODY_PART_HINTS.some((hint) => lc.includes(hint)) && !isSpatialSentence(lc) && !SCENE_HINTS.some((hint) => lc.includes(hint));
+}
+
+function buildFallbackContextWindow(chunk, fullText, radius = 260) {
+    if (!chunk || typeof chunk.start !== 'number' || typeof chunk.end !== 'number') {
+        return summarizeBeatText(fullText, 420);
+    }
+    const source = String(fullText || '');
+    const start = Math.max(0, chunk.start - radius);
+    const end = Math.min(source.length, chunk.end + radius);
+    return summarizeBeatText(source.slice(start, end), 420);
+}
+
+function selectSceneAnchors(contextText) {
+    const sentences = splitPromptSentences(contextText);
+    const selected = [];
+    for (const sentence of sentences) {
+        if (selected.length >= 3) break;
+        if (isSpatialSentence(sentence) && !selected.includes(sentence)) {
+            selected.push(sentence);
+        }
+    }
+    for (const sentence of sentences) {
+        if (selected.length >= 3) break;
+        if (isBodyPartOnlySentence(sentence) || selected.includes(sentence)) continue;
+        selected.push(sentence);
+    }
+    return selected;
+}
+
+function buildActionFocusSentence(contextText, sceneAnchors) {
+    const sceneAnchorSet = new Set(sceneAnchors);
+    const candidate = splitPromptSentences(contextText)
+        .find((sentence) => !sceneAnchorSet.has(sentence) && !isBodyPartOnlySentence(sentence) && scoreBeatChunk(sentence) > 0);
+    return candidate || '';
+}
+
+function escapeRegExp(text) {
+    return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractPicCopyField(picCopy, fieldName) {
+    const text = String(picCopy || '');
+    if (!text || !fieldName) return '';
+    const labels = ['Face', 'Marks', 'Underwear', 'Accessories', 'Equipment', 'Pose', 'Expression', 'Condition'];
+    const nextLabels = labels.filter((label) => label !== fieldName).map(escapeRegExp).join('|');
+    const re = new RegExp(`${escapeRegExp(fieldName)}:\\s*([\\s\\S]*?)(?=\\s(?:${nextLabels}):|$)`, 'i');
+    const match = text.match(re);
+    return match?.[1]?.trim().replace(/\s+/g, ' ') || '';
+}
+
+function humanizePicCopy(picCopy) {
+    let text = String(picCopy || '').trim();
+    if (!text) return '';
+
+    const replacements = [
+        [/Face:\s*/gi, 'Visible facial features include '],
+        [/Marks:\s*/gi, 'Visible marks include '],
+        [/Underwear:\s*/gi, 'Their underwear is '],
+        [/Accessories:\s*/gi, 'They also wear '],
+        [/Equipment:\s*/gi, 'They carry '],
+        [/Pose:\s*/gi, 'At this moment, '],
+        [/Expression:\s*/gi, 'Their expression is '],
+        [/Condition:\s*/gi, 'Their current condition is '],
+        [/They wears:\s*/gi, 'They are wearing '],
+        [/He wears:\s*/gi, 'He is wearing '],
+        [/She wears:\s*/gi, 'She is wearing '],
+    ];
+
+    for (const [pattern, replacement] of replacements) {
+        text = text.replace(pattern, replacement);
+    }
+
+    return text
+        .replace(/\s+/g, ' ')
+        .replace(/\.\s*\./g, '.')
+        .trim();
+}
+
+function buildSpatialLayoutSentence(activeEntries, contextText) {
+    const contextSentences = splitPromptSentences(contextText).filter((sentence) => isSpatialSentence(sentence));
+    if (contextSentences.length) {
+        return contextSentences.slice(0, 2).join(' ');
+    }
+
+    const descriptors = activeEntries
+        .map((entry, index) => {
+            const pose = extractPicCopyField(entry?.pic_copy, 'Pose');
+            if (!pose) return '';
+            const slot = activeEntries.length >= 3
+                ? (index === 0 ? 'foreground' : index === activeEntries.length - 1 ? 'background' : 'midground')
+                : (index === 0 ? 'foreground' : 'background');
+            return `${entry.name} is in the ${slot}, ${pose}.`;
+        })
+        .filter(Boolean);
+
+    return descriptors.length ? descriptors.join(' ') : '';
+}
+
+function pickActivePicCopyEntries(fullText, localText, allCopies) {
+    const combined = `${String(fullText || '')} ${String(localText || '')}`.toLowerCase();
+    const entries = Object.values(allCopies || {});
+    const named = entries.filter((entry) => combined.includes(String(entry?.name || '').toLowerCase()));
+    if (named.length) return named.slice(0, 3);
+    const tiered = entries
+        .filter((entry) => ['PIN', 'ACT'].includes(String(entry?.tier || '').toUpperCase()))
+        .slice(0, 2);
+    if (tiered.length) return tiered;
+    return entries.slice(0, 2);
+}
+
+async function buildFallbackTagForBeat(chunk, fullText) {
+    const localBeatText = typeof chunk === 'string' ? chunk : chunk?.text || '';
+    const allCopies = typeof window.ff4VirGetPicCopies === 'function'
+        ? await window.ff4VirGetPicCopies()
+        : {};
+    const activeEntries = pickActivePicCopyEntries(fullText, localBeatText, allCopies);
+    const names = activeEntries.map((entry) => entry.name).filter(Boolean);
+    const contextWindow = buildFallbackContextWindow(typeof chunk === 'string' ? null : chunk, fullText);
+    const sceneAnchors = selectSceneAnchors(contextWindow);
+    const spatialLayout = buildSpatialLayoutSentence(activeEntries, contextWindow);
+    const actionFocus = buildActionFocusSentence(contextWindow, sceneAnchors);
+    const combinedContext = [contextWindow, ...activeEntries.map((entry) => entry?.pic_copy)].join(' ');
+    const imageType = normalizeImageType(inferImageTypeFromBeat(combinedContext, names.length));
+    const countSentence = names.length > 0
+        ? `${names.length} ${names.length === 1 ? 'person is' : 'people are'} in the picture.`
+        : '';
+    const promptBody = [
+        inferRatingSentence(combinedContext),
+        countSentence,
+        ...sceneAnchors,
+        spatialLayout,
+        'Keep each character\'s clothing, exposure level, underwear, accessories, and equipment exactly as currently described unless this exact visible moment explicitly changes them.',
+        'Sexual action alone does not imply nudity or removed clothing for any other character.',
+        ...activeEntries.map((entry) => humanizePicCopy(entry?.pic_copy)).filter(Boolean),
+        actionFocus,
+    ].filter(Boolean).join(' ');
+    const prompt = escapePromptAttributeValue(promptBody);
+    return {
+        prompt,
+        type: imageType,
+        tag: `<pic prompt="${prompt}" type="${imageType}">`,
+    };
+}
+
+function upsertLastPicAudit(patch) {
+    const cfg = extension_settings[extensionName] || {};
+    const current = cfg.lastPicAudit && typeof cfg.lastPicAudit === 'object'
+        ? cfg.lastPicAudit
+        : {};
+    cfg.lastPicAudit = {
+        ...current,
+        ...patch,
+        at: new Date().toISOString(),
+    };
+}
+
+async function ensureInlinePicTags(messageId, message) {
+    const text = String(message?.mes || '');
+    const cfg = extension_settings[extensionName] || {};
+    if (!text.trim()) return { insertedCount: 0, expectedBeatCount: 0, visibleTagCount: 0, finalText: text };
+
+    const imgTagRegex = ensureGlobalRegex(regexFromString(cfg.promptInjection.regex));
+    const visibleMatches = collectValidPicMatches([...text.matchAll(imgTagRegex)]);
+    const maskedText = maskRanges(text, [imgTagRegex, /<details[\s\S]*?<\/details>/gi]);
+    const expectedBeatCount = Math.max(1, Math.min(cfg.maxPicsPerMessage || 4, detectExpectedBeatCount(maskedText)));
+    const visibleTagCount = visibleMatches.length;
+
+    if (cfg.allowFallbackTagInsertion !== true) {
+        upsertLastPicAudit({
+            messageId,
+            visibleTagCount,
+            expectedBeatCount,
+            hoistedFromThink: false,
+            fallbackInserted: false,
+            insertedCount: 0,
+            finalSlotInjection: true,
+            fallbackDisabled: true,
+            types: visibleMatches.map(({ originalTag }) => normalizeImageType(extractImageType(originalTag))),
+        });
+        return { insertedCount: 0, expectedBeatCount, visibleTagCount, finalText: text };
+    }
+
+    if (visibleTagCount >= expectedBeatCount) {
+        upsertLastPicAudit({
+            messageId,
+            visibleTagCount,
+            expectedBeatCount,
+            hoistedFromThink: false,
+            fallbackInserted: false,
+            insertedCount: 0,
+            finalSlotInjection: true,
+            types: visibleMatches.map(({ originalTag }) => normalizeImageType(extractImageType(originalTag))),
+        });
+        return { insertedCount: 0, expectedBeatCount, visibleTagCount, finalText: text };
+    }
+
+    const chunks = collectBeatChunks(maskedText);
+    const targetBeatCount = Math.max(1, Math.min(cfg.maxPicsPerMessage || 4, expectedBeatCount));
+    const chosenChunks = chooseBeatChunks(chunks, targetBeatCount);
+    const missingCount = Math.max(0, Math.min((cfg.maxPicsPerMessage || 4) - visibleTagCount, targetBeatCount - visibleTagCount));
+    if (!chosenChunks.length || missingCount <= 0) {
+        upsertLastPicAudit({
+            messageId,
+            visibleTagCount,
+            expectedBeatCount: targetBeatCount,
+            hoistedFromThink: false,
+            fallbackInserted: false,
+            insertedCount: 0,
+            finalSlotInjection: true,
+        });
+        return { insertedCount: 0, expectedBeatCount: targetBeatCount, visibleTagCount, finalText: text };
+    }
+
+    const selectedForInsert = chosenChunks.slice(visibleTagCount, visibleTagCount + missingCount);
+    const inserts = [];
+    for (const chunk of selectedForInsert) {
+        const fallback = await buildFallbackTagForBeat(chunk, maskedText);
+        inserts.push({
+            index: chunk.end,
+            tag: ` ${fallback.tag}`,
+            type: fallback.type,
+        });
+    }
+
+    let finalText = text;
+    for (const insert of inserts.sort((a, b) => b.index - a.index)) {
+        finalText = finalText.slice(0, insert.index) + insert.tag + finalText.slice(insert.index);
+    }
+
+    const missCounter = getMissCounter();
+    missCounter.consecutivePicMisses = 0;
+    upsertLastPicAudit({
+        messageId,
+        visibleTagCount,
+        expectedBeatCount: targetBeatCount,
+        hoistedFromThink: false,
+        fallbackInserted: true,
+        insertedCount: inserts.length,
+        finalSlotInjection: true,
+        types: inserts.map((insert) => insert.type),
+    });
+    return { insertedCount: inserts.length, expectedBeatCount: targetBeatCount, visibleTagCount, finalText };
+}
+
 function hoistPicsFromThink(mes) {
     const text = String(mes || '');
     if (!/<think>/i.test(text) && !/<\/think>/i.test(text)) return text;
@@ -826,6 +1496,7 @@ function hoistPicsFromThink(mes) {
 
 eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
     if (!extension_settings[extensionName] || extension_settings[extensionName].insertType === INSERT_TYPE.DISABLED) return;
+    if (isChatDisabled()) return;
     if (extension_settings[extensionName].skipStreamingPregeneration) return;
     const context = getContext();
     const msgId = context.chat.length - 1;
@@ -835,7 +1506,8 @@ eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
 
     const imgTagRegex = regexFromString(extension_settings[extensionName].promptInjection.regex);
     let matches;
-    const cleanTextDesktop = message.mes.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
+    const hoistedStreamText = hoistPicsFromThink(message.mes);
+    const cleanTextDesktop = hoistedStreamText.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
     if (imgTagRegex.global) { matches = [...cleanTextDesktop.matchAll(imgTagRegex)]; } else { const singleMatch = cleanTextDesktop.match(imgTagRegex); matches = singleMatch ? [singleMatch] : []; }
 
     const validMatches = collectValidPicMatches(matches);
@@ -871,6 +1543,11 @@ async function handleIncomingMessage() {
     ) {
         return;
     }
+    // Per-chat disable — skip all auto-image generation in this chat.
+    if (isChatDisabled()) {
+        debugLog('chat disabled — skipping image generation');
+        return;
+    }
 
     const context = getContext();
     const messageId = context.chat.length - 1;
@@ -881,6 +1558,12 @@ async function handleIncomingMessage() {
         return;
     }
 
+    const hoistedText = hoistPicsFromThink(message.mes);
+    const hoistedFromThink = hoistedText !== String(message.mes || '');
+    if (hoistedFromThink) {
+        message.mes = hoistedText;
+    }
+
     // 确保promptInjection对象和regex属性存在
     if (
         !extension_settings[extensionName].promptInjection ||
@@ -888,6 +1571,19 @@ async function handleIncomingMessage() {
     ) {
         console.error('Prompt injection settings not properly initialized');
         return;
+    }
+
+    const fallbackResult = await ensureInlinePicTags(messageId, message);
+    if (fallbackResult.insertedCount > 0 && fallbackResult.finalText) {
+        message.mes = fallbackResult.finalText;
+    }
+    if (fallbackResult.insertedCount > 0 || hoistedFromThink) {
+        updateMessageBlock(messageId, message);
+        await eventSource.emit(event_types.MESSAGE_UPDATED, messageId);
+        try { context.saveChat?.(); } catch { /* ignore */ }
+    }
+    if (hoistedFromThink) {
+        upsertLastPicAudit({ messageId, hoistedFromThink: true, finalSlotInjection: true });
     }
 
     // 使用正则表达式search
@@ -905,6 +1601,16 @@ async function handleIncomingMessage() {
     }
     debugLog('matched image tags', imgTagRegex, matches);
     const validMatches = collectValidPicMatches(matches);
+    upsertLastPicAudit({
+        messageId,
+        visibleTagCount: validMatches.length,
+        expectedBeatCount: fallbackResult.expectedBeatCount,
+        hoistedFromThink,
+        fallbackInserted: fallbackResult.insertedCount > 0,
+        insertedCount: fallbackResult.insertedCount,
+        finalSlotInjection: true,
+        types: validMatches.map(({ originalTag }) => normalizeImageType(extractImageType(originalTag))),
+    });
     if (matches.length > 0 && validMatches.length === 0) {
         console.warn(`[${extensionName}] Ignored ${matches.length} <pic> tag(s) with empty prompt.`);
     }
@@ -955,18 +1661,19 @@ async function handleIncomingMessage() {
                         const dims = resolveResolution(imageType);
                         window.stImageAutoGenTracker.set(key, "pending");
                         setImageJobStatus(key, 'generating');
-                        const charPrefix = getCharacterSDPrefix();
-                        const effectivePrompt = charPrefix ? `${charPrefix}, ${prompt}` : prompt;
-                        const promise = command.callback(
-                            {
-                                quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true',
-                                processing: 'minimal',
-                                extend: 'false',
-                                width: String(dims.width),
-                                height: String(dims.height),
-                            },
-                            effectivePrompt
-                        );
+                        const effectivePrompt = buildEffectivePrompt(prompt);
+                        warnVirDrift(effectivePrompt);
+                        const cfgFb = extension_settings[extensionName] || {};
+                        const negativeFb = String(cfgFb.negativePrompt || '').trim();
+                        const cmdArgsFb = {
+                            quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true',
+                            processing: 'minimal',
+                            extend: 'false',
+                            width: String(dims.width),
+                            height: String(dims.height),
+                        };
+                        if (negativeFb) cmdArgsFb.negative = negativeFb;
+                        const promise = command.callback(cmdArgsFb, effectivePrompt);
                         window.stImageAutoGenTracker.set(key, promise);
                         imageUrl = await promise;
                         setImageJobStatus(key, imageUrl ? 'done' : 'failed');

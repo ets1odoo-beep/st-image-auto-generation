@@ -23,6 +23,18 @@
         </style>
 
         <div class="flex-container flexnowrap">
+            <label class="checkbox_label" for="image_generation_chat_disabled" style="color: #e74c3c;">
+                <span><b>Disable for THIS chat only</b></span>
+                <input type="checkbox" id="image_generation_chat_disabled" class="checkbox">
+            </label>
+        </div>
+        <div class="image-auto-help">
+            Per-chat kill switch (stored in chat metadata). When checked: this chat skips pic-tag prompt injection AND auto-image generation entirely. Other chats are unaffected. Resets to off when you switch chats — re-check here if the new chat should also be off.
+        </div>
+
+        <hr style="margin: 8px 0; opacity: 0.3;">
+
+        <div class="flex-container flexnowrap">
             <label for="image_generation_insert_type" class="flex1" data-i18n="Image Insert Type">Image Insert Type</label>
             <select id="image_generation_insert_type" class="text_pole widthNatural margin0">
                 <option data-i18n="Insert In Current Message" value="inline">Insert In Current Message</option>
@@ -49,7 +61,7 @@
             <div><label for="prompt_injection_text" class="flex1" data-i18n="Prompt Template">Prompt Template</label></div>
             <textarea id="prompt_injection_text" class="text_pole textarea_compact" rows="4" placeholder="Prompt that instructs the AI to generate image tags"></textarea>
             <div class="image-auto-help">
-                This text is inserted into the model prompt when Prompt Injection is enabled. It should explain when to emit &lt;pic&gt; tags and which type names are allowed.
+                When enabled, this full contract is injected as a final in-chat <code>user</code> prompt. It should explain when to emit visible inline &lt;pic&gt; tags, how to use VIR/PIC COPY, and which type names are allowed.
             </div>
             <div class="image-auto-button-row">
                 <button type="button" id="image_generation_reset_prompt" class="menu_button">Reset Prompt Template</button>
@@ -60,7 +72,7 @@
             <div><label for="prompt_injection_regex" class="flex1" data-i18n="Regex">Regex</label></div>
             <textarea id="prompt_injection_regex" class="text_pole textarea_compact" rows="2" placeholder="Regex used to find pic tags"></textarea>
             <div class="image-auto-help">
-                This finds image tags in AI messages. Capture group 1 must be the image prompt. The default matches single quotes, double quotes, multiline prompts, and self-closing tags.
+                This finds &lt;pic prompt="..."&gt; tags in AI messages. The default quote-aware regex supports single quotes, double quotes, multiline prompts, and self-closing tags. Keep it aligned with the current tag format.
             </div>
             <div class="image-auto-button-row">
                 <button type="button" id="image_generation_test_regex" class="menu_button">Test Regex</button>
@@ -77,7 +89,7 @@
             </select>
         </div>
         <div class="image-auto-help">
-            Position chooses the role used for injected instructions. System is usually strongest. User or assistant can be used if a model reacts poorly to extra system text.
+            Legacy display only. Runtime always injects the full pic contract as a final in-chat <code>user</code> prompt so squash/system bundling cannot bury it.
         </div>
 
         <div class="flex-container flexnowrap">
@@ -85,7 +97,7 @@
             <input id="prompt_injection_depth" class="text_pole widthUnset image-auto-compact-input" type="number" min="0" max="100">
         </div>
         <div class="image-auto-help">
-            Depth controls where the injected prompt is placed in the model input. 0 means near the end, which is easiest and usually best.
+            Depth controls recency from the end of the in-chat stack. <code>0</code> is the absolute final slot and is the intended setting for strongest pic-tag compliance.
         </div>
 
         <hr style="margin: 8px 0; opacity: 0.3;">
@@ -134,6 +146,32 @@
         </label>
         <div class="image-auto-help">
             Enables extra browser console logs for troubleshooting. Leave off for normal use.
+        </div>
+
+        <hr style="margin: 8px 0; opacity: 0.3;">
+
+        <label class="checkbox_label" for="image_generation_dedupe">
+            <span>Per-message prompt dedupe</span>
+            <input type="checkbox" id="image_generation_dedupe" class="checkbox">
+        </label>
+        <div class="image-auto-help">
+            If the AI emits the same &lt;pic prompt&gt; twice in one reply with the same type, generate once and embed both. Saves ComfyUI thrash on long replies.
+        </div>
+
+        <label class="checkbox_label" for="image_generation_vir_drift">
+            <span>VIR drift warner (debug)</span>
+            <input type="checkbox" id="image_generation_vir_drift" class="checkbox">
+        </label>
+        <div class="image-auto-help">
+            When a VIR character is named in the prompt without hair/eyes/skin/wears terms nearby, log a console warning. Diagnostic only — doesn't change the image. Requires ff4-vir-lorebook-sync.
+        </div>
+
+        <div>
+            <div><label for="image_generation_lora_triggers" class="flex1">LoRA Triggers (JSON)</label></div>
+            <textarea id="image_generation_lora_triggers" class="text_pole textarea_compact" rows="3" placeholder='{ "Belne": "&lt;lora:belne_v3:0.8&gt;", "ETSVin": "&lt;lora:etsvin:0.7&gt;" }'></textarea>
+            <div class="image-auto-help">
+                Map of character name → trigger string. When the name appears in the AI's prompt, the trigger is prepended to the final /sd call. Skip if you don't train LoRAs.
+            </div>
         </div>
 
         <hr style="margin: 8px 0; opacity: 0.3;">
