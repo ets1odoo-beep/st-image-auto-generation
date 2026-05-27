@@ -522,18 +522,18 @@ async function loadSettings() {
             'ACTIVE VIR is the source for identity anchors.',
             'PIC COPY is the strongest identity source.',
         ];
-        // v3.3 VN-CADENCE + DEFERRED-STAGING (character blocks describe SELF-pose
-        // only; all inter-character contact is consolidated in a closing
-        // "Staging:" sentence after every character has been introduced — fixes
-        // the forward-reference confusion where char A's pose mentioned char B
-        // before B was visually established).
-        // v1.5/v2.0/v3.0/v3.1/v3.2 are all outdated and auto-migrate on next load.
+        // v3.4 PARTIAL-BODY VISIBILITY (adds explicit handling for the common VN
+        // case where only one character is fully framed but a second character's
+        // hand/arm/hip/leg reaches into frame — partial bodies don't get a full
+        // character block; they're identity-anchored and described in the
+        // Staging sentence; the figure count reflects only fully-framed bodies).
+        // v1.5 through v3.3 all auto-migrate on next ST load.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('closing STAGING sentence');
+            && !currentPrompt.includes('[PARTIAL-BODY VISIBILITY');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );

@@ -1,6 +1,7 @@
-// Default Prompt Template — v3.3 VN-CADENCE + DEFERRED-STAGING (multi-pic + anti-forward-reference)
+// Default Prompt Template — v3.4 PARTIAL-BODY VISIBILITY (VN-cadence + deferred-staging + partial-body framing)
 // Pattern per character: NAME, identity-commas; outfit-commas; SELF-pose only (no other names).
 // All inter-character contact → closing "Staging:" sentence after every character is introduced.
+// Partial bodies (hand/arm/hip/leg reaching in) → identity-anchored in Staging, NOT counted as figures.
 // Hard cap: 3 visible characters per pic. Multi-pic: every visual beat → its own pic.
 // Anti-bleed via positional anchors; VIR is the only appearance source.
 //
@@ -58,6 +59,22 @@ Pick the visible subset first. Off-screen people do not appear in the prompt.
 - Intimate/dialogue → 1–2 chars. Confrontation → 2–3 chars. Wide establishing → up to 3 visibly relevant chars (split if more).
 - First-person from {{user}}'s eyes → {{user}} not fully in frame.
 - Behind-shot → describe back/posture/hair-from-behind, NOT face.
+
+[PARTIAL-BODY VISIBILITY — read carefully, common failure mode]
+When only a body part of a second character is in frame (a hand reaching in, an arm at the edge, a hip pressed against the subject, a leg crossing the foreground) — that character is NOT counted as a "figure visible". The figure count refers to fully-framed bodies only.
+
+DO:
+- Frame as "X figure(s) visible, with [name]'s [body part] reaching in from [edge]" so the count is honest.
+- Anchor the partial body's identity by naming the source character. The diffusion model needs skin tone, build, and any distinguishing marks for that body part. Example: "ETSVin's broad light-skinned right hand, thick fingers, faint scar across the knuckles, enters from the right edge of frame."
+- Describe partial-body contact in the closing Staging sentence, not as a separate character block.
+
+DON'T:
+- Say "two figures visible" if one is only an arm. Say "one figure visible, with [partner]'s hand entering from the right".
+- Write a character block for the partial body (no identity-commas / outfit-commas / pose). Partial bodies live in the Staging sentence.
+- Leave the partial body unidentified ("a man's hand only") — without skin tone and build the model invents random anatomy.
+
+EXAMPLE — fingering scene, partial body done right:
+"Medium close-up from the front; one figure visible, with ETSVin's right hand reaching in from the right edge. Belne, hobgoblin female, age 25, 158cm, mature curvaceous, muted green skin, short messy dark-green hair; fully nude; kneeling, spine arched, chest forward, head thrown back, mouth open. Staging: ETSVin's broad light-skinned right hand reaches in from the right edge of frame, thick fingers buried between Belne's thighs; her hands grip his wrist; tears stream down her green cheeks."
 
 [CAMERA / FRAMING — one short line]
 Examples: "Close-up from the side." / "Medium shot from the front." / "Wide scene from front." / "Over-the-shoulder behind {{user}}." / "First-person POV." / "Low-angle from floor."
@@ -141,9 +158,10 @@ Example C — three-character wide scene, self-pose blocks + comprehensive stagi
 2. Are pics placed INLINE at each beat — NOT bunched at the end?
 3. ≤ 3 visible characters per pic? If more → split across consecutive pics.
 4. Each character block = identity-commas; outfit-commas; SELF-pose only (no naming of other characters).
-5. Does the closing "Staging:" sentence cover ALL inter-character contact (who touches whom, who looks at whom)? Forward-references inside character blocks confuse the diffusion model.
-6. Word count inside target per pic? Solo 80–130 / 2-char 140–220 / 3-char 200–290.
-7. Shot count, named chars, blocks all agree?
-8. No trait bleeding between characters?
-9. No booru tags, weighted parens, schema labels, negations, filler words?
-Replies with visual content and only one summary pic at the end are malformed (VN-style cadence). Replies with no \`<pic>\` tag at all are malformed. Character blocks that name other characters in their pose section are malformed (move that contact to the staging sentence).`;
+5. PARTIAL-BODY CHECK: if a body part of a second character reaches into frame, did you (a) NOT count them as a "figure visible", (b) NOT give them a character block, and (c) describe their part with proper identity anchoring (skin tone, build) inside the Staging sentence?
+6. Does the closing "Staging:" sentence cover ALL inter-character contact (who touches whom, who looks at whom)? Forward-references inside character blocks confuse the diffusion model.
+7. Word count inside target per pic? Solo 80–130 / 2-char 140–220 / 3-char 200–290.
+8. Shot count, named chars, blocks all agree?
+9. No trait bleeding between characters?
+10. No booru tags, weighted parens, schema labels, negations, filler words?
+Replies with visual content and only one summary pic at the end are malformed (VN-style cadence). Replies with no \`<pic>\` tag at all are malformed. Character blocks that name other characters in their pose section are malformed (move that contact to the staging sentence). "X figures visible" with a partial-body figure counted is malformed (partial bodies don't count).`;
