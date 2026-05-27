@@ -522,14 +522,15 @@ async function loadSettings() {
             'ACTIVE VIR is the source for identity anchors.',
             'PIC COPY is the strongest identity source.',
         ];
+        // v2.0 (pure natural language) is the current bundled prompt. Anything
+        // older — including the v1.5 hybrid that has [HYBRID STYLE - TAGS + NATURAL LANGUAGE] —
+        // is now considered outdated and gets auto-migrated to v2.0 on next load.
         const usesOutdatedCurrentBundledPrompt =
-            currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
-            && (
-                !currentPrompt.includes('[SPATIAL CONSISTENCY RULES]')
-                || !currentPrompt.includes('Do not write field labels or schema-like fragments inside the pic prompt.')
-                || !currentPrompt.includes('Sexual context does not imply undressing.')
-                || !currentPrompt.includes('Skin description is mandatory.')
-            );
+            (
+                currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
+                || currentPrompt.includes('[REASONING OVERRIDE')
+            )
+            && !currentPrompt.includes('[STYLE — PURE NATURAL LANGUAGE');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
