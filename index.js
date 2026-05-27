@@ -522,15 +522,18 @@ async function loadSettings() {
             'ACTIVE VIR is the source for identity anchors.',
             'PIC COPY is the strongest identity source.',
         ];
-        // v3.2 VN-CADENCE (multi-pic per message, one pic per beat, minimum pic
-        // count gated by reply length, inline placement at each beat).
-        // v1.5/v2.0/v3.0/v3.1 are all outdated and auto-migrate on next load.
+        // v3.3 VN-CADENCE + DEFERRED-STAGING (character blocks describe SELF-pose
+        // only; all inter-character contact is consolidated in a closing
+        // "Staging:" sentence after every character has been introduced — fixes
+        // the forward-reference confusion where char A's pose mentioned char B
+        // before B was visually established).
+        // v1.5/v2.0/v3.0/v3.1/v3.2 are all outdated and auto-migrate on next load.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('[VN-STYLE CADENCE');
+            && !currentPrompt.includes('closing STAGING sentence');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );

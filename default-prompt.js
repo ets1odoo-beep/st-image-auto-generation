@@ -1,5 +1,6 @@
-// Default Prompt Template — v3.2 VN-CADENCE (multi-pic per message + ultra-compact)
-// Pattern per character: NAME, identity-commas; outfit-commas; pose-fragment.
+// Default Prompt Template — v3.3 VN-CADENCE + DEFERRED-STAGING (multi-pic + anti-forward-reference)
+// Pattern per character: NAME, identity-commas; outfit-commas; SELF-pose only (no other names).
+// All inter-character contact → closing "Staging:" sentence after every character is introduced.
 // Hard cap: 3 visible characters per pic. Multi-pic: every visual beat → its own pic.
 // Anti-bleed via positional anchors; VIR is the only appearance source.
 //
@@ -69,9 +70,10 @@ Compression rules:
 - Identity: 6–10 comma-joined facts. "adult human male, age 30, 180cm, broad-shouldered, short dark-brown hair, grey-blue eyes, light skin, stubble"
 - Use "age N" (not "in his thirties"). Use "180cm" (not "180 centimeters tall"). Drop articles where possible.
 - Outfit: head-to-toe garments joined with commas. NO "wears a" / "is wearing" — start with garment: "dark leather jerkin over cream linen shirt, dark trousers, scuffed brown boots"
-- Pose: fragments OK. "arm around her back, hand cupping her breast, gaze down at her, calm" not "he stands with one arm wrapped around her back and his other hand cupping her breast through the dress, looking down at her with calm gentle eyes"
+- Pose: SELF-CONTAINED — describe ONLY this character's own body position, facing direction, and expression. Fragments OK. Example: "sitting back, head tilted forward, expression focused and calm" — NOT "mouth on Belne's breast, hand gripping Feala's hair" (those interactions go in the closing staging sentence after all characters are introduced).
+- The pose section may use "her/him" only for the most-recently-positioned character (e.g. the character immediately to their left/right). If in doubt, defer ALL contact references to the staging sentence.
 - Cut filler: "very/really/quite/rather/somewhat/slightly". Cut redundant "with" chains.
-- Each foreground block: target 35–55 words. Background block (off-focus, behind): 20–35 words.
+- Each foreground block: target 30–50 words. Background block (off-focus, behind): 18–32 words.
 
 FORBIDDEN: booru tags, weighted parens (red:1.2), schema labels (Hair: red), JSON fragments, underscored_compounds, negations (no/not/without).
 
@@ -88,15 +90,19 @@ Each \`prompt="..."\` ≤ 380 words AND ≤ 512 tokens. Target by scope:
    (Combine quality clause, content rating, framing line, and people count. Use periods to chain.)
 2. Scene in ONE short sentence (~10–18 words): place, time, light, 1–2 visible objects.
    "Small wooden cottage at dusk; stone hearth, wooden table with a sword nearby."
-3. ONE compact block per visible character, in the same order as the people-count from step 1. Each block follows the COMPACT pattern above.
-4. Closing staging fragment (~8–15 words) locking who touches/faces/watches whom.
-   "His hand cups her breast; her hands grip his shirt; she looks up."
+3. ONE compact block per visible character, in the same order as the people-count from step 1. Each block follows the COMPACT pattern (identity-commas; outfit-commas; SELF-pose only — no names of other characters in the pose section).
+4. CRITICAL — Closing STAGING sentence (~15–35 words for 2-char, ~25–50 for 3-char). This is where ALL inter-character contact is described, using full names now that every character has been introduced. Lock who touches whom, where, with which hand, who faces whom, who looks at whom. Examples:
+   "His left hand cups her right breast through the dress; her hands grip the front of his shirt; she looks up at him, lips parted."
+   "ETSVin's mouth is on Belne's right breast; his left hand grips Feala's hair at the back of her head; Feala's lips wrap around him with her hands on his thighs; Belne's hands grip his hair, head thrown back."
+   The staging sentence is the ONLY place to describe physical interaction between characters. The character blocks describe only self-pose.
 
 [ANTI-BLEED LOCKS]
 - Each character's traits stay in THEIR block. Hair, eyes, skin, outfit never drift between characters.
-- Name each character EXACTLY ONCE. Repeated names spawn duplicate figures.
-- After naming, use he/she/they OR position ("the woman on the left"). Never re-state the name.
+- Name each character EXACTLY ONCE in their character block. Repeated names spawn duplicate figures.
+- After the character block, use he/she/they OR position ("the woman on the left"). Never re-state the name inside the pose section.
 - Each next character starts with a position anchor: "On the right is...", "Beside her, ...", "Behind, kneeling, is..."
+- NEVER name another character inside a character block's pose section. Doing so confuses the model because the referenced character has not been visually established yet. ALL inter-character contact goes into the closing staging sentence — where every character has already been introduced.
+- The closing staging sentence MAY use full names (one extra mention each) because by then the diffusion model has the visual identity locked.
 - VIR is the only appearance source. Do not invent or omit visible facts.
 - Clothed/nude state from VIR holds. Sexual context does NOT imply undressing.
 - Count, framing, named chars must agree. 3 in frame → exactly 3 blocks.
@@ -110,8 +116,8 @@ portrait (2:3 solo) | landscape (3:2 environment) | closeup (4:5 face/intimacy) 
 Example A — solo closeup (~90 words):
 <pic prompt="Cinematic photograph, warm tungsten light, shallow depth. Safe for work. Close-up from the side; one woman visible, centered, lit from a window right. Quiet apartment, late afternoon; steaming mug on a wooden sill. Lily from Example VN, adult human female, age 22, 168cm, slim athletic build, long straight honey-blonde hair with sun-bleached tips, deep forest-green eyes with thick lashes, fair skin with light freckles, small beauty mark above upper lip; loose ivory cotton tank top, wide scoop neck; head tilted, looking down at the mug cradled in both hands, lips just parted, expression soft and thoughtful." type="closeup">
 
-Example B — two-character intimacy with strict anti-bleed (~175 words):
-<pic prompt="Cinematic photograph, warm amber firelight, shallow depth. Suggestive nudity, exposed breast. Close-up from the side; two figures visible, the man on the right and the woman pressed against him. Small wooden cottage at dusk; stone hearth, wooden table with a sword nearby. On the right is ETSVin, adult human male, age 30, 180cm, sturdy broad-shouldered, short dark-brown hair slightly tousled, grey-blue eyes, light skin with warm undertone, day-old stubble; worn dark-brown leather jerkin over cream linen shirt with sleeves rolled to forearms, dark-brown trousers, scuffed brown ankle boots; arm around her back, hand cupping her breast through the dress, gaze down at her, calm gentle. Pressed against his chest is Raphtalia from The Rising of the Shield Hero, raccoon demi-human female, age 19, 165cm, slender lithe with modest curves, long reddish-brown hair loose past shoulders, brown almond eyes wide and glistening, tan skin flushed deep pink, rounded raccoon ears with darker brown bands pressed flat, bushy ringed tail behind her; simple sage-green linen short-sleeve farm dress, mid-calf, thin cloth belt, barefoot; hands gripping his shirt, lips parted and wet, face turned up to his." type="scene">
+Example B — two-character intimacy, self-pose blocks + staging sentence (~185 words):
+<pic prompt="Cinematic photograph, warm amber firelight, shallow depth. Suggestive nudity, exposed breast. Close-up from the side; two figures visible, the man on the right and the woman on the left pressed close. Small wooden cottage at dusk; stone hearth, wooden table with a sword nearby. On the right is ETSVin, adult human male, age 30, 180cm, sturdy broad-shouldered, short dark-brown hair slightly tousled, grey-blue eyes, light skin with warm undertone, day-old stubble; worn dark-brown leather jerkin over cream linen shirt, sleeves rolled to forearms, dark-brown trousers, scuffed brown ankle boots; standing tall, head tilted down, expression calm and gentle. On the left is Raphtalia from The Rising of the Shield Hero, raccoon demi-human female, age 19, 165cm, slender lithe with modest curves, long reddish-brown hair loose past shoulders, brown almond eyes wide and glistening, tan skin flushed deep pink, rounded raccoon ears with darker brown bands pressed flat, bushy ringed tail behind her; sage-green linen short-sleeve farm dress, mid-calf, thin cloth belt, barefoot; pressed against him, lips parted and wet, face turned upward. Staging: ETSVin's left arm wraps around Raphtalia's back; his right hand cups her breast through the dress; Raphtalia's hands grip the front of his shirt; she looks up into his eyes." type="scene">
 
 Example D — VN-style multi-pic reply (3 inline pics, one per beat):
 
@@ -125,18 +131,19 @@ She froze. ETSVin was waiting against the lamppost, arms crossed, his expression
 
 He pushed off the post and crossed the distance in three slow strides. Her hand on the satchel went tight; she didn't move back.
 
-<pic prompt="Cinematic photograph, low warm lantern light, soft rim on both figures. Suggestive tension. Medium shot from the side; two figures visible, the man closing on the woman who stands her ground. Cobblestone street at dusk; lamppost left, mist around their boots. On the left is Raphtalia from The Rising of the Shield Hero, raccoon demi-human female, age 19, 165cm, slender lithe, long reddish-brown hair, brown almond eyes wide, tan skin flushed faint pink, raccoon ears upright, bushy tail still; sage-green farm dress, mid-calf, brown sandals; planted, satchel strap white-knuckled in her left hand, chin lifted, lips parted. On the right approaching is ETSVin, adult human male, age 30, 180cm, broad-shouldered, dark-brown hair, grey-blue eyes, light skin, stubble; dark leather jerkin over cream shirt, dark trousers, brown boots; mid-stride, weight forward, arms uncrossing, gaze locked on her face, expression intent." type="scene">
+<pic prompt="Cinematic photograph, low warm lantern light, soft rim on both figures. Suggestive tension. Medium shot from the side; two figures visible, the man on the right closing on the woman on the left. Cobblestone street at dusk; lamppost left, mist around their boots. On the left is Raphtalia from The Rising of the Shield Hero, raccoon demi-human female, age 19, 165cm, slender lithe, long reddish-brown hair, brown almond eyes wide, tan skin flushed faint pink, raccoon ears upright, bushy tail still; sage-green farm dress, mid-calf, brown sandals; planted firm, chin lifted, lips parted. On the right is ETSVin, adult human male, age 30, 180cm, broad-shouldered, dark-brown hair, grey-blue eyes, light skin, stubble; dark leather jerkin over cream shirt, dark trousers, brown boots; mid-stride, weight forward, arms uncrossing, expression intent. Staging: Raphtalia grips the satchel strap white-knuckled in her left hand; ETSVin's gaze is locked on her face as he closes the gap." type="scene">
 
-Example C — three-character wide scene (~245 words):
-<pic prompt="Cinematic photograph, low firelight, deep rear shadows. Suggestive nudity. Wide scene from the front; three figures visible, the woman on the left foreground, the man center foreground, a curled figure right rear. Dim cottage at night; rough wooden floorboards, low rug before the hearth, dying fire casting amber across the front. On the left in the foreground is Lily, original character, adult human female, age 22, slim soft build, long straight honey-blonde hair, bright green eyes, fair lightly-freckled skin; thin white cotton tank top, grey cotton briefs, barefoot; leaning inward, one hand gripping his waistband, looking up at him, lips parted. In the center foreground is ETSVin, original character, adult human male, age 30, tall heavy muscular build, short dark-brown hair, calm steel-blue eyes, tanned skin, faint stubble; dark trousers loose at the waist, dark leather boots, bare chest; standing over her, one broad hand low on her waist, shoulders squared, possessive unhurried. On the right at the back, curled against the wall, is Rex from Xenoblade Chronicles 2, late-teen human male, short skinny build, messy mid-brown hair, large brown eyes, pale skin; cream tunic, brown cotton trousers; knees drawn up, arms loose around shins, hollow tear-streaked face, eyes locked on the couple. Firelight warms the foreground; rear wall in shadow." type="scene">
+Example C — three-character wide scene, self-pose blocks + comprehensive staging (~265 words):
+<pic prompt="Cinematic photograph, low firelight, deep rear shadows. Suggestive nudity. Wide scene from the front; three figures visible, the woman on the left foreground, the man center foreground, a curled figure right rear. Dim cottage at night; rough wooden floorboards, low rug before the hearth, dying fire casting amber across the front. On the left in the foreground is Lily, original character, adult human female, age 22, slim soft build, long straight honey-blonde hair, bright green eyes, fair lightly-freckled skin; thin white cotton tank top, grey cotton briefs, barefoot; leaning inward, head tilted up, lips parted, expression curious. In the center foreground is ETSVin, original character, adult human male, age 30, tall heavy muscular build, short dark-brown hair, calm steel-blue eyes, tanned skin, faint stubble; dark trousers loose at the waist, dark leather boots, bare chest; standing tall, shoulders squared, head tilted down, expression possessive and unhurried. On the right at the back, curled against the wall, is Rex from Xenoblade Chronicles 2, late-teen human male, short skinny build, messy mid-brown hair, large brown eyes, pale skin; cream tunic, brown cotton trousers; knees drawn up to chest, arms loose around shins, hollow tear-streaked face, eyes wide. Staging: Lily's right hand grips ETSVin's waistband while she looks up at him; ETSVin's broad left hand rests low on Lily's waist; Rex's eyes are locked on the couple from the back wall. Firelight warms the foreground; rear wall in shadow." type="scene">
 
 [FINAL CHECK]
 1. Did you hit the MIN PIC COUNT for this reply length? (≤80w: 1+; 81–200w: 2+; 201–350w: 3+; 350w+: 4+; sex/combat phase: 1 per phase.)
 2. Are pics placed INLINE at each beat — NOT bunched at the end?
 3. ≤ 3 visible characters per pic? If more → split across consecutive pics.
-4. Each character = ONE sentence: identity-commas; outfit-commas; pose-fragment.
-5. Word count inside target per pic? Solo 80–130 / 2-char 140–220 / 3-char 200–290.
-6. Shot count, named chars, blocks all agree?
-7. No trait bleeding between characters?
-8. No booru tags, weighted parens, schema labels, negations, filler words?
-Replies with visual content and only one summary pic at the end are malformed (VN-style cadence). Replies with no \`<pic>\` tag at all are malformed.`;
+4. Each character block = identity-commas; outfit-commas; SELF-pose only (no naming of other characters).
+5. Does the closing "Staging:" sentence cover ALL inter-character contact (who touches whom, who looks at whom)? Forward-references inside character blocks confuse the diffusion model.
+6. Word count inside target per pic? Solo 80–130 / 2-char 140–220 / 3-char 200–290.
+7. Shot count, named chars, blocks all agree?
+8. No trait bleeding between characters?
+9. No booru tags, weighted parens, schema labels, negations, filler words?
+Replies with visual content and only one summary pic at the end are malformed (VN-style cadence). Replies with no \`<pic>\` tag at all are malformed. Character blocks that name other characters in their pose section are malformed (move that contact to the staging sentence).`;
