@@ -522,18 +522,17 @@ async function loadSettings() {
             'ACTIVE VIR is the source for identity anchors.',
             'PIC COPY is the strongest identity source.',
         ];
-        // v3.4 PARTIAL-BODY VISIBILITY (adds explicit handling for the common VN
-        // case where only one character is fully framed but a second character's
-        // hand/arm/hip/leg reaches into frame — partial bodies don't get a full
-        // character block; they're identity-anchored and described in the
-        // Staging sentence; the figure count reflects only fully-framed bodies).
-        // v1.5 through v3.3 all auto-migrate on next ST load.
+        // v3.5 ATOMIC ACTIONS (one observable state per pose phrase — diffusion
+        // models can't decompose "spine deeply arched backward" or stacked
+        // emotions like "overwhelmed desperate relieved"; templates now teach
+        // the AI to split into atoms and pick ONE concrete word per slot).
+        // v1.5 through v3.4 all auto-migrate on next ST load.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('[PARTIAL-BODY VISIBILITY');
+            && !currentPrompt.includes('[ATOMIC ACTION VOCABULARY');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
