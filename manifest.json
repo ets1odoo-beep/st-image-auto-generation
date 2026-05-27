@@ -4,7 +4,7 @@
     "optional": [],
     "js": "index.js",
     "author": "knav0",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "homePage": "https://github.com/ets1odoo-beep/st-image-auto-generation",
     "originalAuthor": "wickedcode01",
     "basedOn": "https://github.com/wickedcode01/st-image-auto-generation",

@@ -522,15 +522,15 @@ async function loadSettings() {
             'ACTIVE VIR is the source for identity anchors.',
             'PIC COPY is the strongest identity source.',
         ];
-        // v3.1 ULTRA-COMPACT (3-char cap + ultra-tight identity/outfit/pose
-        // compression) is the current bundled prompt. v1.5 hybrid, v2.0 pure-NL,
-        // and v3.0 compact are all outdated and get auto-migrated on next load.
+        // v3.2 VN-CADENCE (multi-pic per message, one pic per beat, minimum pic
+        // count gated by reply length, inline placement at each beat).
+        // v1.5/v2.0/v3.0/v3.1 are all outdated and auto-migrate on next load.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('[ULTRA-COMPACT STYLE]');
+            && !currentPrompt.includes('[VN-STYLE CADENCE');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
