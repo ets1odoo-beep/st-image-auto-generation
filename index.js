@@ -522,15 +522,15 @@ async function loadSettings() {
             'ACTIVE VIR is the source for identity anchors.',
             'PIC COPY is the strongest identity source.',
         ];
-        // v2.0 (pure natural language) is the current bundled prompt. Anything
-        // older — including the v1.5 hybrid that has [HYBRID STYLE - TAGS + NATURAL LANGUAGE] —
-        // is now considered outdated and gets auto-migrated to v2.0 on next load.
+        // v3.0 (compact natural language: commas for facts, semicolons for blocks,
+        // sentences for action) is the current bundled prompt. v1.5 hybrid and v2.0
+        // pure-NL are both outdated and get auto-migrated on next load.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('[STYLE — PURE NATURAL LANGUAGE');
+            && !currentPrompt.includes('[COMPACT STYLE — commas for facts');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
