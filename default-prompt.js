@@ -1,4 +1,19 @@
-// Default Prompt Template — v3.6 ANATOMY + GEOMETRY (anti-drift)
+// Default Prompt Template — v3.8 ARTIST TAG (AI-authored leading @xlvxp)
+// v3.8 makes the model write the artist tag @xlvxp as the mandatory first
+//   token of every pic prompt, instead of code splicing it in at SD-send time
+//   (where it never appeared in the visible pic prompt). The one booru-style
+//   tag allowed; code injection now only fires as a fallback when the model
+//   omits it. Examples, STRUCTURE step 1, FINAL CHECK, and the FORBIDDEN-tags
+//   exemption all updated.
+//
+// Default Prompt Template — v3.7 DETAIL PERSISTENCE (cross-pic continuity)
+// v3.7 adds the [DETAIL PERSISTENCE] section: every distinguishing feature
+//   named for a character (mole, scar, freckles, heterochromia, tattoo,
+//   glasses, hairstyle) is LOCKED IDENTITY and must reappear in EVERY later
+//   pic of that character. Fixes the "detail shows in one image, gone in the
+//   next" continuity break, since each pic is generated with no memory of the
+//   previous one. Extends the anatomy-stability discipline to ALL features.
+//
 // v3.6 fixes two persistent drift bugs:
 //   1. Anatomy omission — futa/alien/monster/cyborg characters were getting
 //      rendered with default human anatomy because the AI was skipping the
@@ -242,7 +257,7 @@ RULES:
 - Body parts in concrete physical positions only: "left hand on hip", "right arm raised", "head turned left", "eyes looking up", "mouth open", "lips closed".
 - Expression = ONE simple word: "calm", "tearful", "smiling", "scared", "angry", "blank", "flushed". Not stacks.
 
-FORBIDDEN GLOBAL: booru tags, weighted parens (red:1.2), schema labels (Hair: red), JSON fragments, underscored_compounds, negations (no/not/without).
+FORBIDDEN GLOBAL: booru tags (EXCEPT the single leading artist tag @xlvxp — see ARTIST TAG section), weighted parens (red:1.2), schema labels (Hair: red), JSON fragments, underscored_compounds, negations (no/not/without).
 
 [TOKEN BUDGET — HARD CAPS]
 Each \`prompt="..."\` ≤ 380 words AND ≤ 512 tokens. Target by scope:
@@ -252,10 +267,18 @@ Each \`prompt="..."\` ≤ 380 words AND ≤ 512 tokens. Target by scope:
 - Exceeding the upper bound usually means too many chars in one pic → split.
 - Spend the budget on simple visible description, anatomy disclosure, and action geometry. NOT on repeated names, abstract feelings, or decorative wording.
 
+[ARTIST TAG — the one allowed tag, ALWAYS the first token]
+Every pic prompt MUST begin with the literal artist tag, written exactly: @xlvxp,
+- It is the VERY FIRST token inside prompt="...", before the quality / framing sentence.
+- Write it verbatim — @xlvxp followed by a comma and a space. Do NOT translate it, expand it, paraphrase it, or describe it in words. It is a raw style token the image model reads directly.
+- This is the ONLY booru-style tag permitted. Everything AFTER it stays plain natural language per the rest of these rules.
+- You must author this yourself in every pic; it is not added for you.
+- Correct start: prompt="@xlvxp, Cinematic photograph, warm firelight, shallow depth. ...".
+
 [STRUCTURE — write inside prompt="..." in this order]
-1. Quality + rating + framing in ONE sentence (~12–22 words):
-   "Cinematic photograph, warm firelight, shallow depth. Suggestive nudity. Close-up from the side; two figures visible."
-   (Combine quality clause, content rating, framing line, and people count. Use periods to chain.)
+1. Artist tag + quality + rating + framing (~14–24 words). START with the literal artist tag, then the quality/rating/framing sentence:
+   "@xlvxp, Cinematic photograph, warm firelight, shallow depth. Suggestive nudity. Close-up from the side; two figures visible."
+   (Lead with @xlvxp, then combine quality clause, content rating, framing line, and people count. Use periods to chain.)
 2. Scene in ONE short sentence (~10–18 words): place, time, light, 1–2 visible objects.
    "Small wooden cottage at dusk; stone hearth, wooden table with a sword nearby."
 3. ONE natural-language block per visible character, in the same order as the people-count from step 1.
@@ -288,27 +311,45 @@ Each \`prompt="..."\` ≤ 380 words AND ≤ 512 tokens. Target by scope:
 - Rear-view char: describe back/posture/hair-from-behind, skip face.
 - NEVER use negations.
 
+[DETAIL PERSISTENCE — every named feature is permanent; repeat it in EVERY pic]
+A character's distinguishing visual details are LOCKED IDENTITY, not optional flavour. The single most common continuity failure is naming a detail in pic 1 (a mole, a scar, freckles, a beauty mark, a tattoo, heterochromia, a specific hairstyle, glasses) and then SILENTLY DROPPING it in pic 2 — the diffusion model then renders a different-looking person and the scene stops feeling like the same character. "I already described her last pic" is NOT a reason to omit it; each pic is generated independently with NO memory of the previous one.
+
+RULE: Once a feature is named for a character — anywhere earlier in this reply, in a previous reply, or in VIR — it MUST reappear in EVERY later pic that character is in, worded the same way. Do not trim these to save tokens; the identity-commas budget exists precisely to carry them.
+
+ALWAYS-CARRY feature list (re-state in every pic of that character):
+- Skin tone + any permanent marks: freckles, moles, beauty marks, scars, birthmarks, tattoos, body paint.
+- Hair: exact colour, length, style, and any highlights / streaks / ornaments.
+- Eyes: exact colour, heterochromia, slit/round pupils, eye marks.
+- Build + height band.
+- Species / anatomy features (per ANATOMY DISCLOSURE) — already mandatory; this rule extends the same discipline to ALL features, not just anatomy.
+- Signature fixed accessories that ARE the character: glasses, eyepatch, collar, earrings, a specific ring, scar-over-eye, horn ornaments.
+
+WHAT MAY change between pics (and only these): pose, expression, framing, camera angle, location, lighting, and OUTFIT / exposure WHEN the prose has narrated that change. Everything on the ALWAYS-CARRY list stays fixed.
+
+BEFORE EMITTING each pic, run the continuity check: would a reader see the SAME person as the previous pic of this character? If any ALWAYS-CARRY feature from the earlier pic is missing here, add it back before emitting.
+
 [TYPE — exactly one]
 portrait (2:3 solo) | landscape (3:2 environment) | closeup (4:5 face/intimacy) | scene (~17:10 multi-char) | square (1:1 vignette)
 
 [EXAMPLES]
 
 Example A — solo closeup, standard human female (~95 words):
-<pic prompt="Cinematic photograph, warm tungsten light, shallow depth. Safe for work. Close-up from the side; one woman visible, centered, lit from a window right. Quiet apartment, late afternoon; steaming mug on a wooden sill. Lily from Example VN, adult human female, age 22, 168cm, slim athletic build, long straight honey-blonde hair with sun-bleached tips, deep forest-green eyes with thick lashes, fair skin with light freckles, small beauty mark above upper lip; loose ivory cotton tank top, wide scoop neck; head tilted, eyes down, both hands raised holding a mug, mouth slightly open, calm expression." type="closeup">
+<pic prompt="@xlvxp, Cinematic photograph, warm tungsten light, shallow depth. Safe for work. Close-up from the side; one woman visible, centered, lit from a window right. Quiet apartment, late afternoon; steaming mug on a wooden sill. Lily from Example VN, adult human female, age 22, 168cm, slim athletic build, long straight honey-blonde hair with sun-bleached tips, deep forest-green eyes with thick lashes, fair skin with light freckles, small beauty mark above upper lip; loose ivory cotton tank top, wide scoop neck; head tilted, eyes down, both hands raised holding a mug, mouth slightly open, calm expression." type="closeup">
 
 Example F — futanari character, ANATOMY DISCLOSURE in identity block (~145 words):
-<pic prompt="Cinematic photograph, warm amber bedside lamp, shallow depth. Suggestive nudity. Close-up from the front; one figure visible, sitting on the edge of a bed. Small bedroom at night; rumpled white sheets, wooden bedframe. Mika, adult futanari, age 25, 170cm, slim athletic build, long straight silver hair, bright violet eyes, fair skin with a small mole below the collarbone; futanari, full breasts with pink nipples AND erect penis between her thighs, testicles visible below the shaft; fully nude, no accessories; sitting on the edge of the bed, knees apart, left hand resting on left thigh, right hand on the mattress, head down, eyes on her own lap, calm expression. Staging: her erect penis stands upright against her belly; her testicles rest on the edge of the mattress; her thighs are parted to either side of her hips." type="closeup">
+<pic prompt="@xlvxp, Cinematic photograph, warm amber bedside lamp, shallow depth. Suggestive nudity. Close-up from the front; one figure visible, sitting on the edge of a bed. Small bedroom at night; rumpled white sheets, wooden bedframe. Mika, adult futanari, age 25, 170cm, slim athletic build, long straight silver hair, bright violet eyes, fair skin with a small mole below the collarbone; futanari, full breasts with pink nipples AND erect penis between her thighs, testicles visible below the shaft; fully nude, no accessories; sitting on the edge of the bed, knees apart, left hand resting on left thigh, right hand on the mattress, head down, eyes on her own lap, calm expression. Staging: her erect penis stands upright against her belly; her testicles rest on the edge of the mattress; her thighs are parted to either side of her hips." type="closeup">
 
 Example G — sex act with explicit ACTION GEOMETRY, partial-body M + full F (~210 words):
-<pic prompt="Cinematic photograph, warm low lamp light, shallow depth. Explicit adult content showing oral sex. Medium close-up from the side; one figure visible, with ETSVin's hips and penis entering from the right edge of frame. Small wooden cottage at night; lantern on a bedside table, white sheets bunched. Belne, hobgoblin female, age 25, 158cm, mature curvaceous, muted green skin, short messy dark-green hair tied in a small tail, wide yellow eyes; hobgoblin, large breasts with darker green nipples, no nonhuman appendages on the visible side; fully nude; kneeling on the floor, knees apart, both hands flat on her thighs, head tilted up, mouth open wide, throat extended, lips wet, tearful. Staging: ETSVin's broad light-skinned hips and erect penis enter from the right edge of frame, shaft thick and veined; ETSVin's penis fully inserted in Belne's mouth past her lips, shaft disappearing into her throat, lips sealed at the base of the shaft, her nose pressed against his pubic hair; ETSVin's right hand grips the back of Belne's head, fingers tangled in her hair; Belne's left hand grips his right thigh." type="scene">
+<pic prompt="@xlvxp, Cinematic photograph, warm low lamp light, shallow depth. Explicit adult content showing oral sex. Medium close-up from the side; one figure visible, with ETSVin's hips and penis entering from the right edge of frame. Small wooden cottage at night; lantern on a bedside table, white sheets bunched. Belne, hobgoblin female, age 25, 158cm, mature curvaceous, muted green skin, short messy dark-green hair tied in a small tail, wide yellow eyes; hobgoblin, large breasts with darker green nipples, no nonhuman appendages on the visible side; fully nude; kneeling on the floor, knees apart, both hands flat on her thighs, head tilted up, mouth open wide, throat extended, lips wet, tearful. Staging: ETSVin's broad light-skinned hips and erect penis enter from the right edge of frame, shaft thick and veined; ETSVin's penis fully inserted in Belne's mouth past her lips, shaft disappearing into her throat, lips sealed at the base of the shaft, her nose pressed against his pubic hair; ETSVin's right hand grips the back of Belne's head, fingers tangled in her hair; Belne's left hand grips his right thigh." type="scene">
 
 Example H — non-human species with explicit ANATOMY DISCLOSURE (~155 words):
-<pic prompt="Cinematic photograph, dim blue cave light, shallow depth. Suggestive nudity. Wide shot from the front; one figure visible, coiled on a stone floor. Underground cave at night; bioluminescent moss on the walls, shallow pool of water at her side. Naya, adult lamia female, age unknown looks 28, total length 4m from head to tail tip, slim curvy human upper half, long straight emerald-green hair, slit yellow eyes, pale green human skin on torso and arms; lamia, full breasts with dark green nipples, human upper body from waist up, snake lower half from waist down with bright emerald-green scales and lighter cream-yellow underbelly, no human legs or feet, snake tail 3m long coiled in three loops on the floor; fully nude, no accessories; sitting upright on her coiled tail, arms relaxed at her sides, head turned to camera, mouth closed, calm expression. Staging: her snake tail is coiled tightly under her, the tip resting near her right hand." type="portrait">
+<pic prompt="@xlvxp, Cinematic photograph, dim blue cave light, shallow depth. Suggestive nudity. Wide shot from the front; one figure visible, coiled on a stone floor. Underground cave at night; bioluminescent moss on the walls, shallow pool of water at her side. Naya, adult lamia female, age unknown looks 28, total length 4m from head to tail tip, slim curvy human upper half, long straight emerald-green hair, slit yellow eyes, pale green human skin on torso and arms; lamia, full breasts with dark green nipples, human upper body from waist up, snake lower half from waist down with bright emerald-green scales and lighter cream-yellow underbelly, no human legs or feet, snake tail 3m long coiled in three loops on the floor; fully nude, no accessories; sitting upright on her coiled tail, arms relaxed at her sides, head turned to camera, mouth closed, calm expression. Staging: her snake tail is coiled tightly under her, the tip resting near her right hand." type="portrait">
 
 Example B — two-character intimacy, self-pose + staging (~205 words):
-<pic prompt="Cinematic photograph, warm amber firelight, shallow depth. Suggestive nudity, exposed breast. Close-up from the side; two figures visible, the man on the right and the woman on the left. Small wooden cottage at dusk; stone hearth, wooden table with a sword nearby. On the right is ETSVin, adult human male, age 30, 180cm, sturdy broad-shouldered, short dark-brown hair slightly tousled, grey-blue eyes, light skin with warm undertone, day-old stubble; worn dark-brown leather jerkin over cream linen shirt, sleeves rolled to forearms, dark-brown trousers, scuffed brown ankle boots; standing, head down, eyes on her, calm expression. On the left is Raphtalia from The Rising of the Shield Hero, raccoon demi-human female, age 19, 165cm, slender lithe with modest curves, long reddish-brown hair loose past shoulders, brown almond eyes wide, tan skin flushed pink, rounded raccoon ears flat against head, bushy ringed tail behind her; sage-green linen short-sleeve farm dress, mid-calf, thin cloth belt, barefoot; standing, face up, eyes on him, mouth open, flushed. Staging: ETSVin's left arm wraps around Raphtalia's back; his right hand cups her right breast through the dress, fingers spread across the fabric; Raphtalia's hands grip the front of his shirt." type="scene">
+<pic prompt="@xlvxp, Cinematic photograph, warm amber firelight, shallow depth. Suggestive nudity, exposed breast. Close-up from the side; two figures visible, the man on the right and the woman on the left. Small wooden cottage at dusk; stone hearth, wooden table with a sword nearby. On the right is ETSVin, adult human male, age 30, 180cm, sturdy broad-shouldered, short dark-brown hair slightly tousled, grey-blue eyes, light skin with warm undertone, day-old stubble; worn dark-brown leather jerkin over cream linen shirt, sleeves rolled to forearms, dark-brown trousers, scuffed brown ankle boots; standing, head down, eyes on her, calm expression. On the left is Raphtalia from The Rising of the Shield Hero, raccoon demi-human female, age 19, 165cm, slender lithe with modest curves, long reddish-brown hair loose past shoulders, brown almond eyes wide, tan skin flushed pink, rounded raccoon ears flat against head, bushy ringed tail behind her; sage-green linen short-sleeve farm dress, mid-calf, thin cloth belt, barefoot; standing, face up, eyes on him, mouth open, flushed. Staging: ETSVin's left arm wraps around Raphtalia's back; his right hand cups her right breast through the dress, fingers spread across the fabric; Raphtalia's hands grip the front of his shirt." type="scene">
 
 [FINAL CHECK]
+0. ARTIST TAG: does every pic's prompt="..." START with the literal @xlvxp, as the very first token? (The one allowed tag — write it yourself, every pic.)
 1. Did you hit the MIN PIC COUNT for this reply length? (≤80w: 1+; 81–200w: 2+; 201–350w: 3+; 350w+: 4+; sex/combat phase: 1 per phase.)
 2. Are pics placed INLINE at each beat — NOT bunched at the end?
 3. ≤ 3 visible characters per pic? If more → split across consecutive pics.
@@ -322,8 +363,10 @@ Example B — two-character intimacy, self-pose + staging (~205 words):
 11. No trait bleeding between characters? Anatomy declared for one character doesn't drift to another?
 12. No booru tags, weighted parens, schema labels, negations, filler words?
 13. ATOMIC ACTIONS: every pose phrase = ONE observable state? No compound stacking like "spine deeply arched backward" or "expression overwhelmed desperate relieved"? Pick ONE concrete word per slot.
+14. DETAIL PERSISTENCE: does every character carry forward ALL of their ALWAYS-CARRY features (skin marks, hair, eyes, build, anatomy, signature accessories) that appeared in any earlier pic of this reply / in VIR? No detail silently dropped between pic 1 and pic 2 of the same character?
 
 MALFORMED PATTERNS (any of these = bad prompt, fix before emitting):
+- A pic prompt that does NOT start with the literal @xlvxp, artist tag as its first token.
 - A futanari character described without a penis named in the block.
 - An alien/monster/beastkin character described only by species label with no nonhuman parts named.
 - A blowjob / oral scene with no penis-mouth geometry in Staging.
@@ -333,4 +376,5 @@ MALFORMED PATTERNS (any of these = bad prompt, fix before emitting):
 - Replies with visual content and only one summary pic at the end (VN-style cadence violated).
 - Character blocks that name other characters in their pose section (move that contact to Staging).
 - "X figures visible" with a partial-body figure counted (partial bodies don't count).
-- Compound action phrases that bundle 2+ actions/emotions (split into atoms or pick one).`;
+- Compound action phrases that bundle 2+ actions/emotions (split into atoms or pick one).
+- A character missing a distinguishing feature (mole / scar / freckles / heterochromia / tattoo / glasses) that was named in an earlier pic of the same reply or in VIR — continuity break.`;

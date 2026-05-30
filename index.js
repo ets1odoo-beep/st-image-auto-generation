@@ -258,6 +258,16 @@ function ensureQualityPrefix(prompt) {
     if (!cfg.qualityPrefixAuto) return prompt;
     const prefix = String(cfg.qualityPrefix || '').trim();
     if (!prefix) return prompt;
+    // Primary path is now AI-authored: the prompt template instructs the model
+    // to write the leading artist tag (first token of the quality prefix, e.g.
+    // "@xlvxp") itself. If it already did, treat the prefix as handled and do
+    // NOT inject — code injection here is only a fallback for replies that omit
+    // the tag entirely.
+    const firstTok = prefix.split(',')[0].trim().toLowerCase();
+    if (firstTok) {
+        const headStart = String(prompt || '').replace(/^[\s"']+/, '').slice(0, firstTok.length + 2).toLowerCase();
+        if (headStart.startsWith(firstTok)) return String(prompt || '').trim();
+    }
     // Cheap match: first ~80 chars contain the prefix verbatim or the @xlvxp tag
     const head = String(prompt || '').slice(0, Math.max(prefix.length + 40, 120)).toLowerCase();
     const pfxLower = prefix.toLowerCase();
@@ -320,7 +330,16 @@ function buildEffectivePrompt(rawPrompt) {
     p = applyLoraTriggers(p);
     p = normalizePromptPeopleCount(p);
     const charPrefix = getCharacterSDPrefix();
-    if (charPrefix) p = `${charPrefix}, ${p}`;
+    if (charPrefix) {
+        // Don't double-prepend an artist/style tag that the quality prefix
+        // already placed at the head. The user's per-character SD prefix is
+        // often the same artist tag as qualityPrefix (e.g. "@xlvxp"), which
+        // would otherwise yield "@xlvxp, @xlvxp, masterpiece, ...".
+        const head = p.slice(0, charPrefix.length + 4).toLowerCase();
+        if (!head.startsWith(charPrefix.toLowerCase())) {
+            p = `${charPrefix}, ${p}`;
+        }
+    }
     return p;
 }
 
@@ -551,6 +570,13 @@ async function loadSettings() {
                 !currentPrompt.includes('[ANATOMY DISCLOSURE')
                 || !currentPrompt.includes('[ACTION GEOMETRY')
                 || !currentPrompt.includes('SEX-ACT TRANSLATION TABLE')
+                // v3.7 — cross-pic continuity: every named feature (mole, scar,
+                // freckles, heterochromia, glasses) must repeat in every later
+                // pic of that character. Installs on v3.6 lack this section.
+                || !currentPrompt.includes('[DETAIL PERSISTENCE')
+                // v3.8 — AI authors the leading @xlvxp artist tag itself.
+                // Installs on v3.7 and earlier lack this section.
+                || !currentPrompt.includes('[ARTIST TAG')
             );
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
