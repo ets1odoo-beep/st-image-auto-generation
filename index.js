@@ -165,6 +165,11 @@ function getGenerationCommand() {
 }
 
 function encodeMarkdownUrl(url) {
+    // Markdown image syntax: ![alt](url "title") — `"` and `'` end the URL and
+    // start a title; `)` ends the URL; `<` `>` form an autolink; `[` `]` end
+    // the image syntax. Card names like  `Isadora "Izzy" Kessel | ... (now ...)`
+    // survive server-side sanitize-filename's `(` `)` (those aren't stripped)
+    // and reach the client URL where they break the markdown parse.
     return String(url || '')
         // % MUST come first — encoding it after the others would re-escape
         // the %20/%28/etc we just inserted. Only encode bare % that is NOT
@@ -173,6 +178,13 @@ function encodeMarkdownUrl(url) {
         .replace(/ /g, '%20')
         .replace(/\(/g, '%28')
         .replace(/\)/g, '%29')
+        .replace(/"/g, '%22')
+        .replace(/'/g, '%27')
+        .replace(/</g, '%3C')
+        .replace(/>/g, '%3E')
+        .replace(/\[/g, '%5B')
+        .replace(/\]/g, '%5D')
+        .replace(/\|/g, '%7C')
         // # is the URL fragment separator — must be encoded or the browser
         // truncates the request path at the first #. Chat names like
         // "(US Mommies #41)" silently 404 without this.
@@ -522,17 +534,24 @@ async function loadSettings() {
             'ACTIVE VIR is the source for identity anchors.',
             'PIC COPY is the strongest identity source.',
         ];
-        // v3.5 ATOMIC ACTIONS (one observable state per pose phrase — diffusion
-        // models can't decompose "spine deeply arched backward" or stacked
-        // emotions like "overwhelmed desperate relieved"; templates now teach
-        // the AI to split into atoms and pick ONE concrete word per slot).
-        // v1.5 through v3.4 all auto-migrate on next ST load.
+        // v3.6 ANATOMY + GEOMETRY — fixes two persistent drift bugs:
+        //   1. anatomy omission (futa without penis, alien without tentacles)
+        //      via mandatory ANATOMY DISCLOSURE per-character-block, loophole
+        //      ("if visible") removed
+        //   2. verb-vs-geometry mismatch (deepthroat scene with penis adjacent
+        //      to face) via mandatory ACTION GEOMETRY in Staging — describe
+        //      body-part intersections, never just the verb label
+        // v1.5 through v3.5 all auto-migrate on next ST load.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('[ATOMIC ACTION VOCABULARY');
+            && (
+                !currentPrompt.includes('[ANATOMY DISCLOSURE')
+                || !currentPrompt.includes('[ACTION GEOMETRY')
+                || !currentPrompt.includes('SEX-ACT TRANSLATION TABLE')
+            );
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
@@ -979,6 +998,16 @@ eventSource.on(event_types.CHAT_CHANGED, () => { refreshImagePromptInjection(); 
 eventSource.on(event_types.SETTINGS_UPDATED, () => { refreshImagePromptInjection(); });
 window.stImageAutoGenTracker = window.stImageAutoGenTracker || new Map();
 window.stImageAutoGenStatuses = window.stImageAutoGenStatuses || new Map();
+// Public API — exposed for sibling extensions (e.g. st-inline-image-viewer)
+// so the rerender path can apply the same prompt sanitization
+// (sanitizeForAnimaQwen / ensureQualityPrefix / applyLoraTriggers /
+// normalizePromptPeopleCount + character SD prefix) that auto-image-gen
+// itself uses. Without this, the rerender feeds the raw stored prompt to
+// ComfyUI which can fail silently ("no recognizable outputs") on workflows
+// that require the quality prefix or whose text encoder mis-handles
+// people-count mismatches.
+window.stImageAutoGenBuildEffectivePrompt = buildEffectivePrompt;
+window.stImageAutoGenGetCharacterSDPrefix = getCharacterSDPrefix;
 // Sequential generation queue — prevents flooding ComfyUI with parallel requests
 // which causes model unload/reload thrashing
 window.stImageGenQueue = window.stImageGenQueue || [];
