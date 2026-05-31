@@ -70,7 +70,11 @@ const defaultSettings = {
         // and the first non-empty capture group wins.
         regex: '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/g',
         position: 'deep_user', // legacy UI field; runtime forces user-role injection
-        depth: 0, // 0 = absolute final slot. >0 = N positions earlier from the end.
+        depth: 1, // 1 = one slot BEFORE the user's latest message, so the real
+                  // user input stays the final-recency turn. depth 0 (absolute
+                  // last) buried the user's input behind this ~5k-token rules
+                  // wall, which made weak models ignore the input and re-send
+                  // their previous reply verbatim.
     },
     queueConcurrency: 1,
     generationDelayMs: 0,
@@ -530,8 +534,14 @@ async function loadSettings() {
             extension_settings[extensionName].promptInjection.position = 'deep_user';
             settingsChanged = true;
         }
-        if (!Number.isFinite(Number(extension_settings[extensionName].promptInjection.depth))) {
-            extension_settings[extensionName].promptInjection.depth = 0;
+        // Migrate depth 0 → 1. depth 0 injected the pic-tag rules at the
+        // absolute final slot, AFTER the user's latest message, so the model's
+        // highest-recency turn was a wall of formatting rules and the real
+        // input was buried — weak models then re-sent their previous reply.
+        // depth 1 keeps the rules squash-proof but puts the user input last.
+        const curDepth = Number(extension_settings[extensionName].promptInjection.depth);
+        if (!Number.isFinite(curDepth) || curDepth < 1) {
+            extension_settings[extensionName].promptInjection.depth = 1;
             settingsChanged = true;
         }
 
@@ -560,24 +570,19 @@ async function loadSettings() {
         //   2. verb-vs-geometry mismatch (deepthroat scene with penis adjacent
         //      to face) via mandatory ACTION GEOMETRY in Staging — describe
         //      body-part intersections, never just the verb label
-        // v1.5 through v3.5 all auto-migrate on next ST load.
+        // v1.5 through v3.8 all auto-migrate on next ST load.
+        // v3.9 COMPRESSED — same rules/fields/categories as v3.8 but hard-
+        // compressed ~7-8k tok → ~1.6-2.1k tok (no SEX-ACT/COMBAT tables; the
+        // geometry examples are inline and the model generalizes). The unique
+        // sentinel "generalize the same way for any act" exists ONLY in the
+        // compressed prompt, so every older verbose prompt (which lacks it)
+        // re-syncs once, and the compressed prompt does not loop.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && (
-                !currentPrompt.includes('[ANATOMY DISCLOSURE')
-                || !currentPrompt.includes('[ACTION GEOMETRY')
-                || !currentPrompt.includes('SEX-ACT TRANSLATION TABLE')
-                // v3.7 — cross-pic continuity: every named feature (mole, scar,
-                // freckles, heterochromia, glasses) must repeat in every later
-                // pic of that character. Installs on v3.6 lack this section.
-                || !currentPrompt.includes('[DETAIL PERSISTENCE')
-                // v3.8 — AI authors the leading @xlvxp artist tag itself.
-                // Installs on v3.7 and earlier lack this section.
-                || !currentPrompt.includes('[ARTIST TAG')
-            );
+            && !currentPrompt.includes('generalize the same way for any act');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
@@ -930,12 +935,15 @@ function getMesRole() {
     }
 }
 
-// Inject the FULL pic-tag contract as the absolute final in-chat prompt.
+// Inject the FULL pic-tag contract as a deep in-chat prompt, one slot BEFORE
+// the user's latest message (depth 1).
 // IMPORTANT: we inject with the 'user' role, NOT 'system'. Many presets enable
 // squash_system_messages, which merges every system-role injection into one
 // blob and reorders it — that buries this injection near the top of the prompt.
-// A 'user'-role message is never squashed, so it stays at the final recency
-// slot on every preset when depth=0.
+// A 'user'-role message is never squashed, so it stays at deep recency.
+// We use depth 1 (not 0): at depth 0 the rules wall sat AFTER the user's real
+// input, making weak models ignore the input and re-send their previous reply.
+// depth 1 keeps the rules at high recency while leaving the user input last.
 const IMAGE_PROMPT_KEY = 'ST_IMAGE_AUTO_GEN';
 const IMAGE_PROMPT_POSITION = extension_prompt_types.IN_CHAT;
 const LEGACY_PIC_PRIORITY_KEY = 'ST_IMAGE_PIC_PRIORITY';
@@ -952,7 +960,8 @@ function refreshImagePromptInjection() {
             cfg.insertType === INSERT_TYPE.DISABLED ||
             isChatDisabled();
         const userDepth = Number(cfg?.promptInjection?.depth);
-        const depth = Number.isFinite(userDepth) && userDepth >= 0 ? userDepth : 0;
+        // Floor at depth 1 so the user's latest message always stays last.
+        const depth = Number.isFinite(userDepth) && userDepth >= 1 ? userDepth : 1;
         if (disabled) {
             setExtPrompt(IMAGE_PROMPT_KEY, '', IMAGE_PROMPT_POSITION, depth);
             setExtPrompt(LEGACY_PIC_PRIORITY_KEY, '', IMAGE_PROMPT_POSITION, 0);
