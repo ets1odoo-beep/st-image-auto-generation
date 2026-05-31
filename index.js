@@ -88,7 +88,8 @@ const defaultSettings = {
     sanitizePrompts: true,     // strip SD weight syntax, negations, URLs, fancy quotes
     virDriftWarn: false,       // warn when a VIR character is named without appearance terms
     enableDedupe: true,        // same prompt+type twice in one reply → one gen, two embeds
-    allowFallbackTagInsertion: false,
+    allowFallbackTagInsertion: false,  // v6.0: OFF — let the AI count beats; no mechanical pic padding
+    maxPicsPerMessage: 5,              // ceiling used only when fallback insertion is re-enabled
     loraTriggers: {},          // map<characterName, triggerString>; prepended when name found in prompt
     lastPicAudit: {},
 };
@@ -577,12 +578,15 @@ async function loadSettings() {
         // sentinel "generalize the same way for any act" exists ONLY in the
         // compressed prompt, so every older verbose prompt (which lacks it)
         // re-syncs once, and the compressed prompt does not loop.
+        // v5.0: sentinel "cadence-v5" lives only in the beat-cadence+attribution
+        // prompt, so every older bundled prompt (verbose, v3.6-v3.9, and v4.0
+        // which has cadence-v4 but not v5) re-syncs once to the current contract.
         const usesOutdatedCurrentBundledPrompt =
             (
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('generalize the same way for any act');
+            && !currentPrompt.includes('cadence-v7');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
@@ -635,9 +639,23 @@ async function loadSettings() {
             settingsChanged = true;
         }
 
+        // v6.0 one-time cadence migration: v4.0 had forced fallback insertion ON
+        // (mechanical pic padding), which over-produced pics regardless of the
+        // real beat count. Turn it OFF once so the AI alone decides the count via
+        // the one-pic-per-beat prompt; the user can re-enable it in settings.
+        if (extension_settings[extensionName].cadenceV6Applied !== true) {
+            extension_settings[extensionName].allowFallbackTagInsertion = false;
+            if (extension_settings[extensionName].maxPicsPerMessage === undefined) {
+                extension_settings[extensionName].maxPicsPerMessage = 5;
+            }
+            extension_settings[extensionName].cadenceV6Applied = true;
+            settingsChanged = true;
+            console.log(`[${extensionName}] Applied v6.0 beat-exact cadence: fallback insertion OFF (AI counts beats).`);
+        }
+
         for (const key of [
             'queueConcurrency', 'generationDelayMs', 'skipStreamingPregeneration', 'debug', 'resolutionProfile',
-            'negativePrompt', 'qualityPrefix', 'qualityPrefixAuto', 'sanitizePrompts', 'virDriftWarn', 'enableDedupe', 'allowFallbackTagInsertion', 'loraTriggers', 'lastPicAudit',
+            'negativePrompt', 'qualityPrefix', 'qualityPrefixAuto', 'sanitizePrompts', 'virDriftWarn', 'enableDedupe', 'allowFallbackTagInsertion', 'maxPicsPerMessage', 'loraTriggers', 'lastPicAudit',
         ]) {
             if (extension_settings[extensionName][key] === undefined) {
                 const def = defaultSettings[key];
@@ -1233,7 +1251,7 @@ function detectExpectedBeatCount(text) {
     const strong = chunks.filter((chunk) => chunk.score > 0).length;
     if (strong <= 1) return 1;
     if (strong === 2) return 2;
-    return Math.min(4, strong);
+    return Math.min(5, strong);
 }
 
 function chooseBeatChunks(chunks, targetCount) {
@@ -1397,15 +1415,22 @@ function buildSpatialLayoutSentence(activeEntries, contextText) {
 }
 
 function pickActivePicCopyEntries(fullText, localText, allCopies) {
-    const combined = `${String(fullText || '')} ${String(localText || '')}`.toLowerCase();
     const entries = Object.values(allCopies || {});
-    const named = entries.filter((entry) => combined.includes(String(entry?.name || '').toLowerCase()));
-    if (named.length) return named.slice(0, 3);
+    const local = String(localText || '').toLowerCase();
+    const full = String(fullText || '').toLowerCase();
+    // Prefer characters named in THIS beat's local context, so an auto-inserted
+    // pic depicts the actor/speaker of that beat — not whoever else is named
+    // elsewhere in the message (which caused wrong-character fallback pics).
+    const localNamed = entries.filter((entry) => entry?.name && local.includes(String(entry.name).toLowerCase()));
+    if (localNamed.length) return localNamed.slice(0, 3);
+    // No name in the beat → use a SINGLE message-level subject, not the whole cast.
+    const fullNamed = entries.filter((entry) => entry?.name && full.includes(String(entry.name).toLowerCase()));
+    if (fullNamed.length) return fullNamed.slice(0, 1);
     const tiered = entries
         .filter((entry) => ['PIN', 'ACT'].includes(String(entry?.tier || '').toUpperCase()))
-        .slice(0, 2);
+        .slice(0, 1);
     if (tiered.length) return tiered;
-    return entries.slice(0, 2);
+    return entries.slice(0, 1);
 }
 
 async function buildFallbackTagForBeat(chunk, fullText) {
@@ -1413,9 +1438,11 @@ async function buildFallbackTagForBeat(chunk, fullText) {
     const allCopies = typeof window.ff4VirGetPicCopies === 'function'
         ? await window.ff4VirGetPicCopies()
         : {};
-    const activeEntries = pickActivePicCopyEntries(fullText, localBeatText, allCopies);
-    const names = activeEntries.map((entry) => entry.name).filter(Boolean);
     const contextWindow = buildFallbackContextWindow(typeof chunk === 'string' ? null : chunk, fullText);
+    // Attribute the inserted pic to the beat's own actor: detect names in the
+    // beat plus its immediate context window, not the entire message.
+    const activeEntries = pickActivePicCopyEntries(fullText, `${localBeatText} ${contextWindow}`, allCopies);
+    const names = activeEntries.map((entry) => entry.name).filter(Boolean);
     const sceneAnchors = selectSceneAnchors(contextWindow);
     const spatialLayout = buildSpatialLayoutSentence(activeEntries, contextWindow);
     const actionFocus = buildActionFocusSentence(contextWindow, sceneAnchors);
@@ -1574,6 +1601,13 @@ eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
     const imgTagRegex = regexFromString(extension_settings[extensionName].promptInjection.regex);
     let matches;
     const hoistedStreamText = hoistPicsFromThink(message.mes);
+    // Generate images ONLY from pics that reach the visible OUTPUT — never from a
+    // still-OPEN <think> block. A reasoning model may scribble several candidate
+    // <pic> prompts while thinking; rendering those would spawn wrong/extra images.
+    // So: closed <think>...</think> has its real pics hoisted to visible by
+    // hoistPicsFromThink (then the empty block is stripped here), while an open
+    // <think>...$ is stripped whole so its in-progress draft pics are ignored.
+    // Pre-generation therefore starts once </think> closes and the output streams.
     const cleanTextDesktop = hoistedStreamText.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
     if (imgTagRegex.global) { matches = [...cleanTextDesktop.matchAll(imgTagRegex)]; } else { const singleMatch = cleanTextDesktop.match(imgTagRegex); matches = singleMatch ? [singleMatch] : []; }
 
