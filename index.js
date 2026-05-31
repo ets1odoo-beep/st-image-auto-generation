@@ -68,7 +68,11 @@ const defaultSettings = {
         // Older regex used [^"']* which truncated prompts at the FIRST apostrophe
         // (e.g. "ETSVin's shirt" became "ETSVin"). This pattern fires both branches
         // and the first non-empty capture group wins.
-        regex: '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/g',
+        // The `i` flag is REQUIRED: models intermittently capitalize the tag
+        // (<Pic prompt=...>), e.g. at sentence start. HTML tags are case-insensitive
+        // so it renders/hides the same, but a case-sensitive /g regex silently
+        // misses <Pic> → no image generated. Always keep the `i` flag.
+        regex: '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/gi',
         position: 'deep_user', // legacy UI field; runtime forces user-role injection
         depth: 1, // 1 = one slot BEFORE the user's latest message, so the real
                   // user input stays the final-recency turn. depth 0 (absolute
@@ -578,6 +582,9 @@ async function loadSettings() {
         // sentinel "generalize the same way for any act" exists ONLY in the
         // compressed prompt, so every older verbose prompt (which lacks it)
         // re-syncs once, and the compressed prompt does not loop.
+        // v8.0: sentinel "cadence-v8" lives only in the always-on beat-pic
+        // prompt, so saved bundled prompts with the v7 zero-pic loophole
+        // re-sync once to the current contract.
         // v5.0: sentinel "cadence-v5" lives only in the beat-cadence+attribution
         // prompt, so every older bundled prompt (verbose, v3.6-v3.9, and v4.0
         // which has cadence-v4 but not v5) re-syncs once to the current contract.
@@ -586,7 +593,7 @@ async function loadSettings() {
                 currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]')
                 || currentPrompt.includes('[REASONING OVERRIDE')
             )
-            && !currentPrompt.includes('cadence-v7');
+            && !currentPrompt.includes('cadence-v8');
         const usesLegacyVerbosePrompt = verbosePromptMarkers.every((marker) =>
             currentPrompt.includes(marker),
         );
@@ -610,6 +617,9 @@ async function loadSettings() {
             '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*\\/?>/g',
             // Old broken default (truncated at apostrophe):
             '/<pic\\b(?=[^>]*\\sprompt=["\'][^"\']*["\'])[^>]*\\sprompt=["\']([^"\']*)["\'][^>]*\\/?>/g',
+            // Case-SENSITIVE quote-aware default (missed <Pic ...> when the model
+            // capitalized the tag). Upgrade to the /gi version.
+            '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/g',
         ];
         if (legacyPicRegexes.includes(extension_settings[extensionName].promptInjection.regex)) {
             extension_settings[extensionName].promptInjection.regex = defaultSettings.promptInjection.regex;
@@ -1588,6 +1598,35 @@ function hoistPicsFromThink(mes) {
     return text.replace(block, blockWithoutPics + '\n' + rescued.join('\n') + '\n');
 }
 
+// Streaming-only companion to hoistPicsFromThink: while a <think> block is still
+// OPEN (no </think> yet), a thinking model has often already emitted a fully
+// formed <pic ...> tag mid-reasoning. hoistPicsFromThink ignores it (it only
+// matches CLOSED blocks) and the stream handler then strips the open tail, so
+// pre-generation cannot start until </think> closes — which for a reasoning
+// model is effectively message-end. This lifts COMPLETE pic tags out of the
+// open tail into the visible head so pre-gen fires the moment the tag is whole.
+// Partial tags (no closing `>`) don't match, so we never generate from a
+// half-written prompt. Only used for streaming pre-gen; the MESSAGE_RECEIVED
+// final pass still relies on the closed-block hoist.
+function hoistPicsFromOpenThink(mes) {
+    const text = String(mes || '');
+    const lower = text.toLowerCase();
+    const openIdx = lower.lastIndexOf('<think>');
+    if (openIdx === -1) return text;
+    // If a </think> follows the last <think>, the block is closed — leave it to
+    // hoistPicsFromThink.
+    if (lower.indexOf('</think>', openIdx) !== -1) return text;
+    const head = text.slice(0, openIdx);
+    const tail = text.slice(openIdx);
+    const picTag = /<pic\b[^>]*>/gi;
+    const rescued = tail.match(picTag) || [];
+    if (!rescued.length) return text;
+    const tailWithoutPics = tail.replace(picTag, '');
+    // Rescued pics go into the VISIBLE head, so the subsequent <think>...$ strip
+    // (which removes the open tail) keeps them.
+    return `${head}${rescued.join('\n')}\n${tailWithoutPics}`;
+}
+
 eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
     if (!extension_settings[extensionName] || extension_settings[extensionName].insertType === INSERT_TYPE.DISABLED) return;
     if (isChatDisabled()) return;
@@ -1600,7 +1639,9 @@ eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
 
     const imgTagRegex = regexFromString(extension_settings[extensionName].promptInjection.regex);
     let matches;
-    const hoistedStreamText = hoistPicsFromThink(message.mes);
+    // Closed-block hoist first, then rescue complete pics from a still-open
+    // <think> tail so pre-gen starts the instant a tag is fully formed.
+    const hoistedStreamText = hoistPicsFromOpenThink(hoistPicsFromThink(message.mes));
     // Generate images ONLY from pics that reach the visible OUTPUT — never from a
     // still-OPEN <think> block. A reasoning model may scribble several candidate
     // <pic> prompts while thinking; rendering those would spawn wrong/extra images.
