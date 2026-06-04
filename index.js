@@ -64,15 +64,22 @@ const defaultSettings = {
     promptInjection: {
         enabled: true,
         prompt: DEFAULT_PROMPT,
-        // Quote-aware regex: matches prompt="..." (no embedded ") OR prompt='...' (no embedded ').
-        // Older regex used [^"']* which truncated prompts at the FIRST apostrophe
-        // (e.g. "ETSVin's shirt" became "ETSVin"). This pattern fires both branches
-        // and the first non-empty capture group wins.
+        // Quote-aware regex that tolerates the SAME quote char embedded in the value.
+        // Two branches: prompt="..." (group 1) OR prompt='...' (group 2); the first
+        // non-empty capture wins downstream (see collectValidPicMatches).
+        //   - Older [^"']* truncated at the first apostrophe ("ETSVin's shirt" → "ETSVin").
+        //   - Then [^"]* truncated at the first embedded double-quote: a height like
+        //     5'3" closed the value early, so the rest of the prompt was DROPPED
+        //     (the tag still matched/hid, but only the text before 5'3" was generated).
+        // Fix: capture lazily ([^>]*?, never crossing the tag's `>`) and accept a
+        // closing quote ONLY when it is followed by the next attribute (name=) or the
+        // tag end (lookahead). An interior 5'3" is followed by ` tall...`, not an
+        // attribute/`>`, so it is NOT treated as the close — the full value survives.
         // The `i` flag is REQUIRED: models intermittently capitalize the tag
         // (<Pic prompt=...>), e.g. at sentence start. HTML tags are case-insensitive
         // so it renders/hides the same, but a case-sensitive /g regex silently
         // misses <Pic> → no image generated. Always keep the `i` flag.
-        regex: '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/gi',
+        regex: '/<pic\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
         position: 'deep_user', // legacy UI field; runtime forces user-role injection
         depth: 1, // 1 = one slot BEFORE the user's latest message, so the real
                   // user input stays the final-recency turn. depth 0 (absolute
@@ -179,6 +186,13 @@ function encodeMarkdownUrl(url) {
     // the image syntax. Card names like  `Isadora "Izzy" Kessel | ... (now ...)`
     // survive server-side sanitize-filename's `(` `)` (those aren't stripped)
     // and reach the client URL where they break the markdown parse.
+    // NOTE: only STRAIGHT quotes are stripped by sanitize-filename. CURLY quotes
+    // (“ ” ‘ ’), em-dashes, accented letters, CJK, etc. are LEGAL filename chars,
+    // so a card like `Margaret “Maggie” Whitmore` keeps the curly quotes in both
+    // the on-disk path and the URL the server returns. Raw non-ASCII in the
+    // markdown URL corrupts the rendered <img>, so the trailing pass below
+    // percent-encodes every non-ASCII run (kept together so surrogate pairs /
+    // emoji encode as one code point and encodeURIComponent never throws).
     return String(url || '')
         // % MUST come first — encoding it after the others would re-escape
         // the %20/%28/etc we just inserted. Only encode bare % that is NOT
@@ -199,7 +213,12 @@ function encodeMarkdownUrl(url) {
         // "(US Mommies #41)" silently 404 without this.
         .replace(/#/g, '%23')
         // ? would be parsed as the start of a query string.
-        .replace(/\?/g, '%3F');
+        .replace(/\?/g, '%3F')
+        // Any remaining non-ASCII char (curly quotes “ ” ‘ ’, em-dash —, accents,
+        // CJK, emoji). Match RUNS so surrogate pairs stay intact for
+        // encodeURIComponent. ASCII (incl. the path `/`, `@`, `_`, `-`, `.` we
+        // rely on) is untouched, so existing working URLs are unaffected.
+        .replace(/[^\x00-\x7F]+/g, (run) => encodeURIComponent(run));
 }
 
 // Returns the current character's SD positive prompt prefix, or '' if none / in a group.
@@ -620,11 +639,15 @@ async function loadSettings() {
             // Case-SENSITIVE quote-aware default (missed <Pic ...> when the model
             // capitalized the tag). Upgrade to the /gi version.
             '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/g',
+            // Quote-aware /gi default that still used [^"]*/[^']* — truncated the
+            // value at the first embedded quote (a height like 5'3" dropped the
+            // rest of the prompt). Upgrade to the lookahead-delimited version.
+            '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/gi',
         ];
         if (legacyPicRegexes.includes(extension_settings[extensionName].promptInjection.regex)) {
             extension_settings[extensionName].promptInjection.regex = defaultSettings.promptInjection.regex;
             settingsChanged = true;
-            console.log('[' + extensionName + '] Auto-migrated legacy pic-tag regex to quote-aware version (fixes apostrophe truncation).');
+            console.log('[' + extensionName + '] Auto-migrated legacy pic-tag regex to quote-aware version (fixes apostrophe + embedded-quote truncation).');
         }
 
         // Migrate: add resolutionPresets if missing
@@ -841,13 +864,19 @@ async function createSettings(settingsHtml) {
     $('#image_generation_test_regex').on('click', function () {
         try {
             const regex = regexFromString(extension_settings[extensionName].promptInjection.regex);
-            const sample = `Narration before. <pic prompt="masterpiece, cinematic portrait, red cloak" type="portrait"> Narration after.`;
+            // Sample embeds a height (5'3") inside the double-quoted value so the
+            // test fails loudly if the regex truncates at an interior quote.
+            const sample = `Narration before. <pic prompt="masterpiece, a woman 5'3" tall, red cloak" type="portrait"> Narration after.`;
             const matches = regex.global ? [...sample.matchAll(regex)] : (sample.match(regex) ? [sample.match(regex)] : []);
-            const prompt = matches?.[0]?.[1];
-            if (prompt) {
-                toastr.success(`Regex works. Captured prompt: ${prompt}`);
+            const m0 = matches?.[0];
+            // Quote-aware regex: group 1 (double-quoted) or group 2 (single-quoted).
+            const prompt = (m0?.[1] && m0[1].length) ? m0[1] : m0?.[2];
+            if (prompt && /red cloak/.test(prompt)) {
+                toastr.success(`Regex works (kept the full value past 5'3"). Captured prompt: ${prompt}`);
+            } else if (prompt) {
+                toastr.warning(`Regex truncated at an embedded quote — captured only: ${prompt}`);
             } else {
-                toastr.warning('Regex did not capture a prompt. Capture group 1 must be the prompt text.');
+                toastr.warning('Regex did not capture a prompt. Capture group 1 (or 2) must be the prompt text.');
             }
         } catch (error) {
             toastr.error(`Regex error: ${error}`);
