@@ -81,36 +81,12 @@
             </div>
         </div>
 
-        <div>
-            <div><label for="prompt_injection_regex" class="flex1" data-i18n="Regex">Regex</label></div>
-            <textarea id="prompt_injection_regex" class="text_pole textarea_compact" rows="2" placeholder="Regex used to find pic tags"></textarea>
-            <div class="image-auto-help">
-                This finds &lt;pic prompt="..."&gt; tags in AI messages. The default quote-aware regex supports single quotes, double quotes, multiline prompts, and self-closing tags. Keep it aligned with the current tag format.
-            </div>
-            <div class="image-auto-button-row">
-                <button type="button" id="image_generation_test_regex" class="menu_button">Test Regex</button>
-                <button type="button" id="image_generation_reset_regex" class="menu_button">Reset Regex</button>
-            </div>
-        </div>
-
-        <div class="flex-container flexnowrap">
-            <label for="prompt_injection_position" class="flex1" data-i18n="Position">Position</label>
-            <select id="prompt_injection_position" class="text_pole widthNatural margin0">
-                <option value="deep_system" data-i18n="at Depth System">@D system</option>
-                <option value="deep_user" data-i18n="at Depth User">@D user</option>
-                <option value="deep_assistant" data-i18n="at Depth AI">@D assistant</option>
-            </select>
-        </div>
-        <div class="image-auto-help">
-            Legacy display only. Runtime always injects the full pic contract as a final in-chat <code>user</code> prompt so squash/system bundling cannot bury it.
-        </div>
-
         <div class="flex-container flexnowrap">
             <label for="prompt_injection_depth" class="flex1" data-i18n="Depth">Depth</label>
-            <input id="prompt_injection_depth" class="text_pole widthUnset image-auto-compact-input" type="number" min="0" max="100">
+            <input id="prompt_injection_depth" class="text_pole widthUnset image-auto-compact-input" type="number" min="1" max="100">
         </div>
         <div class="image-auto-help">
-            Depth controls recency from the end of the in-chat stack. <code>0</code> is the absolute final slot and is the intended setting for strongest pic-tag compliance.
+            In-chat depth from the end of the context, as a <code>user</code>-role message (never squashed into the system prompt). <code>1</code> is the floor and the default: the rules sit one slot before your latest message, so your input stays last. Depth 0 put the rules after your input and made weak models repeat their previous reply. Tag detection uses the built-in quote-aware pattern and is not configurable.
         </div>
 
         <hr style="margin: 8px 0; opacity: 0.3;">

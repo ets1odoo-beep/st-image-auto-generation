@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.18.0 (2026-10-21)
+
+- Pic-miss counting only looks at visible chat replies: quiet/impersonate/dry-run generations (summaries, image prompts) used to re-count the same message every time (`totalPicMisses` had reached 3600). The counters are debug aids and are no longer written to settings.json on every generation.
+- Removed the dead **Regex** setting (textarea, Test, Reset and its migration): tag detection has always used the built-in quote-aware pattern. The stored value is left in place but unread.
+- Removed the legacy **Position** dropdown; the runtime always injects as an in-chat `user` message. The **Depth** field now floors at 1 and its help text explains why.
+- With fallback tag insertion off (the default) the beat analysis and audit record are skipped entirely instead of running on every message.
+- Removed unused code: `escapeHtmlAttribute`, `getMesRole`, the retired `ST_IMAGE_PIC_PRIORITY` slot clears; moved the reasoning-rescue comment to the function it describes.
+
 ## 1.17.1 (2026-10-21)
 
 - Negation stripping is now Anima-only. The Krea2 profile keeps `no / not / without / never / avoid` phrases and limiter words (`only`, `just`) exactly as written, because Krea 2's encoder understands them; Anima's small encoder paints the negated noun, so that profile still strips them. The Krea2 template no longer forbids negations.

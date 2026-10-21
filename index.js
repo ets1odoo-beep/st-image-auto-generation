@@ -33,24 +33,6 @@ const INSERT_TYPE = {
     REPLACE: 'replace',
 };
 
-/**
- * Escapes characters for safe inclusion inside HTML attribute values.
- * @param {string} value
- * @returns {string}
- */
-function escapeHtmlAttribute(value) {
-    if (typeof value !== 'string') {
-        return '';
-    }
-
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
 // ── Image profiles ──────────────────────────────────────────────────────────
 // Manual selector for which picture model the chat-completion preset writes
 // for. It changes what this extension injects and how it processes pic prompts;
@@ -758,13 +740,6 @@ function updateUI() {
         $('#prompt_injection_profile_label').text(profileLabel(activeProfile.name));
         refreshProfileHint();
         refreshTokenInfo();
-        $('#prompt_injection_regex').val(
-            extension_settings[extensionName].promptInjection.regex,
-        );
-        $('#prompt_injection_position').val(
-            extension_settings[extensionName].promptInjection.position,
-        );
-        $('#prompt_injection_position').prop('disabled', true);
         $('#prompt_injection_depth').val(
             extension_settings[extensionName].promptInjection.depth,
         );
@@ -990,36 +965,9 @@ async function loadSettings() {
         }
         mirrorActivePrompt(extension_settings[extensionName]);
 
-        // Auto-migrate broken/legacy pic-tag regexes to the current quote-aware default.
-        // The OLD default used [^"']* which truncated prompts at the first apostrophe
-        // ("ETSVin's shirt" → "ETSVin"). Any user still on that pattern should be upgraded.
-        const legacyPicRegexes = [
-            '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*>/g',
-            '/<pic[^>]*\\sprompt=[\'"]([\\s\\S]*?)[\'"]\\s*\\/?>/g',
-            // Old broken default (truncated at apostrophe):
-            '/<pic\\b(?=[^>]*\\sprompt=["\'][^"\']*["\'])[^>]*\\sprompt=["\']([^"\']*)["\'][^>]*\\/?>/g',
-            // Case-SENSITIVE quote-aware default (missed <Pic ...> when the model
-            // capitalized the tag). Upgrade to the /gi version.
-            '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/g',
-            // Quote-aware /gi default that still used [^"]*/[^']* — truncated the
-            // value at the first embedded quote (a height like 5'3" dropped the
-            // rest of the prompt). Upgrade to the lookahead-delimited version.
-            '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/gi',
-            // Lookahead-delimited <pic>-only version. Upgrade so <image ...>
-            // tags emitted by weaker/smaller models still render.
-            '/<pic\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
-            // <pic>/<image> only version. Upgrade so malformed type-first tags
-            // like <closeup pic prompt="..."> still render.
-            '/<(?:pic|image)\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
-            // Normal-quote alias/type-first parser. Upgrade so literal
-            // backslash-escaped attributes (prompt=\"...\") also render.
-            '/<(?:(?:pic|image)|(?:(?:portrait|landscape|closeup|scene|square)(?=[^>]*\\b(?:pic|image)\\b)))\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
-        ];
-        if (legacyPicRegexes.includes(extension_settings[extensionName].promptInjection.regex)) {
-            extension_settings[extensionName].promptInjection.regex = defaultSettings.promptInjection.regex;
-            settingsChanged = true;
-            console.log('[' + extensionName + '] Auto-migrated legacy pic-tag regex to quote-aware version (fixes apostrophe + embedded-quote truncation).');
-        }
+        // promptInjection.regex is kept in storage for older installs but is no
+        // longer read: detection always uses the built-in pattern
+        // (getImageTagDetectionRegex), so no regex migration is needed.
 
         // Migrate: add resolutionPresets if missing
         if (!extension_settings[extensionName].resolutionPresets) {
@@ -1184,24 +1132,13 @@ async function createSettings(settingsHtml) {
         scheduleTokenInfo();
     });
 
-    $('#prompt_injection_regex').on('input', function () {
-        extension_settings[extensionName].promptInjection.regex = $(this).val();
-        saveSettingsDebounced();
-    });
-
-    $('#prompt_injection_position').on('change', function () {
-        extension_settings[extensionName].promptInjection.position =
-            $(this).val();
-        saveSettingsDebounced();
-    });
-
-    // 深度设置事件处理
+    // Depth: floor at 1 (the runtime never injects below 1; see refreshImagePromptInjection).
     $('#prompt_injection_depth').on('input', function () {
         const value = parseInt(String($(this).val()));
-        extension_settings[extensionName].promptInjection.depth = isNaN(value)
-            ? 0
-            : value;
+        extension_settings[extensionName].promptInjection.depth = Number.isFinite(value) && value >= 1 ? value : 1;
         saveSettingsDebounced();
+        refreshImagePromptInjection();
+        scheduleTokenInfo();
     });
 
     // Default image type handler
@@ -1290,13 +1227,6 @@ async function createSettings(settingsHtml) {
         }
     });
 
-    $('#image_generation_reset_regex').on('click', function () {
-        extension_settings[extensionName].promptInjection.regex = defaultSettings.promptInjection.regex;
-        $('#prompt_injection_regex').val(defaultSettings.promptInjection.regex);
-        saveSettingsDebounced();
-        toastr.info('Image tag regex reset to default.');
-    });
-
     $('#image_generation_reset_prompt').on('click', function () {
         const cfg = extension_settings[extensionName];
         ensureProfiles(cfg);
@@ -1308,27 +1238,6 @@ async function createSettings(settingsHtml) {
         refreshImagePromptInjection();
         refreshTokenInfo();
         toastr.info(`${profileLabel(name)} prompt template reset to default.`);
-    });
-
-    $('#image_generation_test_regex').on('click', function () {
-        try {
-            const regex = regexFromString(extension_settings[extensionName].promptInjection.regex);
-            // Sample embeds a height (5'3") inside the double-quoted value so the
-            // test fails loudly if the regex truncates at an interior quote.
-            const sample = `Narration before. <pic prompt="masterpiece, a woman 5'3" tall, red cloak" type="portrait"> Narration after.`;
-            const matches = regex.global ? [...sample.matchAll(regex)] : (sample.match(regex) ? [sample.match(regex)] : []);
-            const m0 = matches?.[0];
-            const prompt = extractPromptFromPicMatch(m0);
-            if (prompt && /red cloak/.test(prompt)) {
-                toastr.success(`Regex works (kept the full value past 5'3"). Captured prompt: ${prompt}`);
-            } else if (prompt) {
-                toastr.warning(`Regex truncated at an embedded quote — captured only: ${prompt}`);
-            } else {
-                toastr.warning('Regex did not capture a prompt. One prompt capture group must contain the value.');
-            }
-        } catch (error) {
-            toastr.error(`Regex error: ${error}`);
-        }
     });
 
     $('.image-generation-resolution-profile').on('click', function () {
@@ -1420,29 +1329,6 @@ $(function () {
         });
     })();
 });
-// 获取消息角色
-function getMesRole() {
-    // 确保对象路径存在
-    if (
-        !extension_settings[extensionName] ||
-        !extension_settings[extensionName].promptInjection ||
-        !extension_settings[extensionName].promptInjection.position
-    ) {
-        return 'system'; // 默认返回system角色
-    }
-
-    switch (extension_settings[extensionName].promptInjection.position) {
-        case 'deep_system':
-            return 'system';
-        case 'deep_user':
-            return 'user';
-        case 'deep_assistant':
-            return 'assistant';
-        default:
-            return 'system';
-    }
-}
-
 // Inject the FULL pic-tag contract as a deep in-chat prompt, one slot BEFORE
 // the user's latest message (depth 1).
 // IMPORTANT: we inject with the 'user' role, NOT 'system'. Many presets enable
@@ -1454,7 +1340,6 @@ function getMesRole() {
 // depth 1 keeps the rules at high recency while leaving the user input last.
 const IMAGE_PROMPT_KEY = 'ST_IMAGE_AUTO_GEN';
 const IMAGE_PROMPT_POSITION = extension_prompt_types.IN_CHAT;
-const LEGACY_PIC_PRIORITY_KEY = 'ST_IMAGE_PIC_PRIORITY';
 function refreshImagePromptInjection() {
     try {
         const ctx = getContext();
@@ -1472,14 +1357,11 @@ function refreshImagePromptInjection() {
         const depth = Number.isFinite(userDepth) && userDepth >= 1 ? userDepth : 1;
         if (disabled) {
             setExtPrompt(IMAGE_PROMPT_KEY, '', IMAGE_PROMPT_POSITION, depth);
-            setExtPrompt(LEGACY_PIC_PRIORITY_KEY, '', IMAGE_PROMPT_POSITION, 0);
             return;
         }
         const prompt = getActiveProfile().prompt || cfg.promptInjection.prompt || '';
         // Force 'user' role so squash_system_messages can't merge-and-bury it.
         const role = extension_prompt_roles.USER;
-        // Clear the retired reminder slot in case an earlier session injected it.
-        setExtPrompt(LEGACY_PIC_PRIORITY_KEY, '', IMAGE_PROMPT_POSITION, 0);
         setExtPrompt(IMAGE_PROMPT_KEY, prompt, IMAGE_PROMPT_POSITION, depth, false, role);
         debugLog(`[${extensionName}] prompt injected IN_CHAT depth ${depth}, role=${role} (squash-proof)`);
     } catch (err) {
@@ -1494,9 +1376,20 @@ function getMissCounter() {
 }
 
 // Hook GENERATION_ENDED to count misses (substantive reply with no pic tag = miss).
-// Reset on any reply that successfully emitted a pic tag.
+// Reset on any reply that successfully emitted a pic tag. Only a visible chat
+// reply counts: quiet/impersonate/dry-run generations (summaries, image
+// prompts) also end with GENERATION_ENDED and used to re-count the same
+// message every time. The counters are debug aids and are no longer saved.
+let _picMissEligible = false;
+eventSource.on(event_types.GENERATION_STARTED, (type, options = {}, dryRun = false) => {
+    _picMissEligible = !dryRun && !['quiet', 'impersonate'].includes(type)
+        && !options?.quiet_prompt && !options?.quietImage;
+});
 eventSource.on(event_types.GENERATION_ENDED, () => {
     try {
+        const eligible = _picMissEligible;
+        _picMissEligible = false;
+        if (!eligible) return;
         const ctx = getContext();
         const last = ctx?.chat?.[ctx.chat.length - 1];
         if (!last || last.is_user || last.is_system) return;
@@ -1529,8 +1422,6 @@ eventSource.on(event_types.GENERATION_ENDED, () => {
             cfg.totalPicMisses = (cfg.totalPicMisses || 0) + 1;
             console.warn(`[${extensionName}] pic miss #${cfg.consecutivePicMisses} (total ${cfg.totalPicMisses})`);
         }
-        const ctx2 = getContext();
-        ctx2?.saveSettingsDebounced?.();
     } catch(e) { console.warn(`[${extensionName}] miss tracking failed`, e); }
 });
 
@@ -1645,18 +1536,7 @@ function collectValidPicMatches(matches) {
         .filter(item => item.originalTag && normalizePromptKey(item.prompt));
 }
 
-// ── Pic-tag rescue from reasoning blocks ────────────────────────────────────
-// Thinking models (Kimi, DeepSeek, etc.) compose the <pic> tag mid-reasoning
-// and often leave it INSIDE the <think>...</think> block. The old code stripped
-// <think> before scanning for pics, so any pic placed in reasoning was deleted
-// with it — that is the "pics work, then vanish for a few turns, then come
-// back" intermittency: it is a coin-flip per generation on where the model
-// puts the tag.
-//
-// Fix: hoist every <pic ...> tag OUT of <think> blocks and into visible prose
-// (right after the block) before extraction. The pic then generates AND is
-// visible, regardless of where the model placed it. The rest of the reasoning
-// stays in <think> and is display-stripped normally.
+// ── Fallback-tag heuristics (only used when allowFallbackTagInsertion is on) ──
 const BEAT_VISUAL_HINTS = [
     'look', 'glance', 'gaze', 'smile', 'grin', 'blush', 'stare', 'expression',
     'stand', 'standing', 'sit', 'sitting', 'kneel', 'kneeling', 'lean', 'turn',
@@ -2045,9 +1925,15 @@ async function ensureInlinePicTags(messageId, message, { allowFallback = true } 
 
     const imgTagRegex = getImageTagDetectionRegex();
     const visibleMatches = collectValidPicMatches([...text.matchAll(imgTagRegex)]);
+    const visibleTagCount = visibleMatches.length;
+    // Fallback insertion is off by default (an invented pic is worse than no
+    // pic). Skip the beat analysis and the audit record entirely in that case;
+    // they only exist to feed the fallback.
+    if (cfg.allowFallbackTagInsertion !== true) {
+        return { insertedCount: 0, expectedBeatCount: 0, visibleTagCount, finalText: text };
+    }
     const maskedText = maskRanges(text, [imgTagRegex, /<details[\s\S]*?<\/details>/gi]);
     const expectedBeatCount = Math.max(1, Math.min(cfg.maxPicsPerMessage || 4, detectExpectedBeatCount(maskedText)));
-    const visibleTagCount = visibleMatches.length;
 
     // Zero-only mode: never pad a reply that already illustrated some beats,
     // only rescue one that illustrated none.
@@ -2137,6 +2023,18 @@ async function ensureInlinePicTags(messageId, message, { allowFallback = true } 
     return { insertedCount: inserts.length, expectedBeatCount: targetBeatCount, visibleTagCount, finalText };
 }
 
+// ── Pic-tag rescue from reasoning blocks ────────────────────────────────────
+// Thinking models (Kimi, DeepSeek, etc.) compose the <pic> tag mid-reasoning
+// and often leave it INSIDE the <think>...</think> block. The old code stripped
+// <think> before scanning for pics, so any pic placed in reasoning was deleted
+// with it — that is the "pics work, then vanish for a few turns, then come
+// back" intermittency: it is a coin-flip per generation on where the model
+// puts the tag.
+//
+// Fix: hoist every <pic ...> tag OUT of <think> blocks and into visible prose
+// (right after the block) before extraction. The pic then generates AND is
+// visible, regardless of where the model placed it. The rest of the reasoning
+// stays in <think> and is display-stripped normally.
 function hoistPicsFromThink(mes) {
     const text = String(mes || '');
     if (!/<think>/i.test(text) && !/<\/think>/i.test(text)) return text;

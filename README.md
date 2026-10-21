@@ -26,8 +26,8 @@ This extension watches AI messages for `<pic prompt="...">` tags, sends the prom
 - Queue concurrency control for ComfyUI and low-VRAM setups.
 - Optional streaming pre-generation.
 - Optional prompt injection for presets that do not already emit `<pic>` tags.
-- Regex test and reset buttons.
-- Low VRAM, Balanced, Quality, HD 1MP, Ultra 1.5MP, and Max 2MP resolution profile buttons.
+- Built-in quote-aware tag detection (normal, alias and type-first tags, escaped attributes).
+- Low VRAM, Balanced, Quality, HD 1MP, Ultra 1.5MP, Max 2MP and Krea 1/1.5/2/3MP resolution profile buttons.
 - Stores prompt/type/variant metadata for compatibility with inline image viewer workflows.
 - Cleaner settings UI with help text for each option.
 
@@ -76,15 +76,9 @@ portrait, landscape, closeup, scene, square
 
 If the AI omits `type` or writes an invalid type, the extension uses your configured fallback type.
 
-## Recommended Regex
+## Tag Detection
 
-Default regex:
-
-```text
-/<pic[^>]*\sprompt=['"]([\s\S]*?)['"]\s*\/?>/g
-```
-
-Capture group 1 must be the image prompt.
+Detection is built in and not configurable. The pattern accepts `<pic ...>` and `<image ...>`, type-first tags like `<closeup pic prompt="...">`, single or double quotes, an embedded quote of the other kind (a height like 5'3"), and backslash-escaped attributes.
 
 ## Settings
 
@@ -106,13 +100,9 @@ Turns on a prompt instruction that tells the AI to write `<pic>` tags. Keep this
 
 The instruction inserted into model context when prompt injection is enabled. The textarea edits the active profile's template; **Reset Prompt Template** restores that profile's bundled default.
 
-**Regex**
+**Depth**
 
-Controls how the extension detects image tags. Use **Test Regex** after editing.
-
-**Position / Depth**
-
-Controls where prompt injection is placed in the model input.
+How far from the end of the context the injected template sits, as an in-chat `user` message. `1` is the floor and the default (one slot before your latest message).
 
 **Default Type**
 
@@ -161,8 +151,7 @@ Use one tag per important visible action. Put each tag inline after the action i
 
 - Confirm `/sd` or `/imagine` works manually.
 - Confirm Image Insert Type is not `Disabled`.
-- Confirm the AI actually emitted a `<pic prompt="...">` tag.
-- Use **Test Regex** to confirm the tag is detected.
+- Confirm the AI actually emitted a `<pic prompt="...">` tag with a `type=` attribute and no `</pic>` closer.
 - Check the browser console with Debug Logs enabled.
 
 **Images attach to the wrong message**
