@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.17.1 (2026-10-21)
+
+- Negation stripping is now Anima-only. The Krea2 profile keeps `no / not / without / never / avoid` phrases and limiter words (`only`, `just`) exactly as written, because Krea 2's encoder understands them; Anima's small encoder paints the negated noun, so that profile still strips them. The Krea2 template no longer forbids negations.
+
 ## 1.17.0 (2026-10-21)
 
 ### Image profiles (Anima / Krea2)

@@ -90,7 +90,7 @@ Capture group 1 must be the image prompt.
 
 **Image Profile**
 
-Manual selector for the picture model your chat-completion preset writes for: `Krea2` (default) or `Anima`. It does not follow the preset and never touches the Image Generation workflow, style or prefix. Each profile has its own prompt template, look-lock row (full `PIC_LOOK` for Krea2, `PIC_LOOK_SHORT` for Anima), prompt cap (6000 / 1800 chars), the Krea 2 "no text" closing sentence (Krea2 only) and its own remembered resolution preset. No artist or style tag is ever added by this extension. The **Injecting now** line under the template shows the exact token count of what is injected, or why nothing is.
+Manual selector for the picture model your chat-completion preset writes for: `Krea2` (default) or `Anima`. It does not follow the preset and never touches the Image Generation workflow, style or prefix. Each profile has its own prompt template, look-lock row (full `PIC_LOOK` for Krea2, `PIC_LOOK_SHORT` for Anima), prompt cap (6000 / 1800 chars), the Krea 2 "no text" closing sentence (Krea2 only), negation handling (Krea2 keeps `no/not/without` phrases because Krea 2 reads them; Anima strips them because its small encoder paints the negated noun) and its own remembered resolution preset. No artist or style tag is ever added by this extension. The **Injecting now** line under the template shows the exact token count of what is injected, or why nothing is.
 
 **Image Insert Type**
 

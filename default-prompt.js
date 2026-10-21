@@ -68,7 +68,7 @@ A blowjob with no penis named, penetration with no orifice + insertion-state, or
 
 const SHARED_TAIL = `[DETAIL PERSISTENCE] Each pic is generated with no memory of the last. So every distinguishing feature named in any earlier pic or in the VIR - moles, scars, freckles, heterochromia, tattoos, glasses, exact hair/eyes, build, anatomy, signature accessories - MUST reappear, worded the same, in every later pic of that character. Only pose, expression, framing, camera, location, light, and (when prose narrates it) outfit may change.
 
-[ANTI-BLEED] Traits stay in their owner's block. Name each character ONCE in their block, then he/she/position. Each next block opens with a position anchor ("On the right is..."). Declared anatomy/features stay identical across pics. Count, blocks and named chars agree. No negations.
+[ANTI-BLEED] Traits stay in their owner's block. Name each character ONCE in their block, then he/she/position. Each next block opens with a position anchor ("On the right is..."). Declared anatomy/features stay identical across pics. Count, blocks and named chars agree.
 
 [BUDGET] Solo 90-150w, 2-char 150-240w, 3-char 210-320w. Over the top -> too many chars, split.
 
@@ -92,7 +92,7 @@ const ANIMA_EXAMPLE = `[EXAMPLE] <pic prompt="safe, 1girl, 1boy, over the should
 // ── Krea 2 (Qwen3-4B encoder): one natural-English paragraph, no tags at all ──
 const KREA2_MIDDLE = `[STYLE] Inside prompt="..." write ONE cohesive natural-English paragraph, no tags of any kind: full sentences, simple words, concrete visible facts (not mood words). The Krea 2 encoder reads every word and invents whatever the prompt leaves out, so each person gets their whole identity row, every garment, and their own pose; a scene runs 1500-3500 characters, a portrait or close-up 900-1800 (cap 6000).
 
-[FORBIDDEN] any tag: rating words, booru count tags, artist tags (any @name), quality words, style or medium words, weighted parens (red:1.2), underscored_compounds, schema labels (Hair: red), JSON, negations (no/not/without), a </pic> closer (draws nothing), the words "blurred", "dim" or "in the background" as a substitute for describing the room.
+[FORBIDDEN] any tag: rating words, booru count tags, artist tags (any @name), quality words, style or medium words, weighted parens (red:1.2), underscored_compounds, schema labels (Hair: red), JSON, a </pic> closer (draws nothing), the words "blurred", "dim" or "in the background" as a substitute for describing the room. Negations are allowed: Krea 2 reads "no bra under the shirt" correctly.
 
 [STRUCTURE inside prompt="..."] in order:
 1. Shot sentence: "An eye-level medium shot shows Nora and Ivan from head to hips across an oak desk in a reading room." One camera height, one crop, every visible person by name (each name here gets a block in step 3), the main action.

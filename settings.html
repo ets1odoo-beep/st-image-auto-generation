@@ -42,7 +42,7 @@
             </select>
         </div>
         <div class="image-auto-help">
-            Manual: pick the picture model your chat-completion preset writes for. It does not follow the preset and never touches the Image Generation workflow, style or prefix. <b>Krea2</b>: full PIC_LOOK rows in the look lock, natural-English template, the "no text" closing sentence, 6000-char cap. <b>Anima</b>: PIC_LOOK_SHORT rows, tag-clause template, 1800-char cap. Each profile keeps its own prompt template and remembers its own resolution preset (switching applies it over the table below). No artist or style tag is ever added by this extension.
+            Manual: pick the picture model your chat-completion preset writes for. It does not follow the preset and never touches the Image Generation workflow, style or prefix. <b>Krea2</b>: full PIC_LOOK rows in the look lock, natural-English template, the "no text" closing sentence, 6000-char cap, negations kept (Krea 2 reads them). <b>Anima</b>: PIC_LOOK_SHORT rows, tag-clause template, 1800-char cap, negations stripped (its small encoder paints the negated noun). Each profile keeps its own prompt template and remembers its own resolution preset (switching applies it over the table below). No artist or style tag is ever added by this extension.
             <div id="image_generation_profile_hint"></div>
         </div>
 

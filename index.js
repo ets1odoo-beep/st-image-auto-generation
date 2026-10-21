@@ -55,8 +55,10 @@ function escapeHtmlAttribute(value) {
 // Manual selector for which picture model the chat-completion preset writes
 // for. It changes what this extension injects and how it processes pic prompts;
 // it never touches the core Image Generation (sd) workflow, style or prefix.
-//   anima - Qwen3-0.6B encoder: tag clause + PIC_LOOK_SHORT rows, 1800-char cap
-//   krea2 - Qwen3-4B encoder: full PIC_LOOK rows, "no text" closer, 6000 cap
+//   anima - Qwen3-0.6B encoder: tag clause + PIC_LOOK_SHORT rows, 1800-char cap,
+//           negations stripped (the small encoder paints the negated noun)
+//   krea2 - Qwen3-4B encoder: full PIC_LOOK rows, "no text" closer, 6000 cap,
+//           negations kept (Krea 2 understands them)
 // Neither profile carries an artist or style tag (no @xlvxp): qualityPrefix is
 // empty and off for both; style lives in the core Image Generation prefix.
 const PROFILE_NAMES = ['krea2', 'anima'];
@@ -69,6 +71,7 @@ const PROFILE_DEFAULTS = {
         noTextSuffix: false,
         lookRow: 'short',
         maxPromptChars: 1800,
+        stripNegations: true,
     },
     krea2: {
         prompt: DEFAULT_PROMPT_KREA2,
@@ -78,6 +81,7 @@ const PROFILE_DEFAULTS = {
         noTextSuffix: true,
         lookRow: 'full',
         maxPromptChars: 6000,
+        stripNegations: false,
     },
 };
 function profileLabel(name) { return name === 'anima' ? 'Anima' : 'Krea2'; }
@@ -383,9 +387,12 @@ function sanitizeForAnimaQwen(prompt) {
     text = text.replace(GEN_PARAM_RE, ' ');
     // 4) Fancy quotes → straight; collapse straight doubles to singles
     text = text.replace(/[“”]/g, "'").replace(/"/g, "'");
-    // 5) Negation phrases — Qwen paints the noun, so "no extra people" → extra people
-    text = text.replace(LIMITER_WORD_RE, '');
-    const negMatches = text.match(NEG_WORD_RE);
+    // 5) Negation phrases, Anima profile only: its small Qwen3-0.6B encoder paints
+    //    the noun, so "no extra people" → extra people. Krea 2's Qwen3-4B encoder
+    //    understands negations, so the Krea2 profile keeps them as written.
+    const stripNeg = getActiveProfile().stripNegations === true;
+    if (stripNeg) text = text.replace(LIMITER_WORD_RE, '');
+    const negMatches = stripNeg ? text.match(NEG_WORD_RE) : null;
     if (negMatches?.length) {
         debugLog(`[${extensionName}] sanitizer stripped ${negMatches.length} negation phrase(s):`, negMatches);
         text = text.replace(NEG_WORD_RE, ' ');
@@ -641,8 +648,8 @@ function buildEffectivePrompt(rawPrompt) {
             p = `${charPrefix}, ${p}`;
         }
     }
-    // Krea 2 profile: the official template's closing sentence, after the cleaner (whose negation
-    // stripping would remove it); only words the prompt quotes on purpose are meant to be drawn.
+    // Krea 2 profile: the official template's closing sentence, appended last so no cleaner
+    // step can touch it; only words the prompt quotes on purpose are meant to be drawn.
     if (getActiveProfile().noTextSuffix && !/pure imagery only/i.test(p)) {
         p = p.replace(/\s*$/, '') + ' Absolutely no text, no typography, no letters, no words, no numbers, no logos, no watermark, no captions, pure imagery only.';
     }
