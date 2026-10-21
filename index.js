@@ -17,7 +17,8 @@ import {
 import { appendMediaToMessage } from '../../../../script.js';
 import { regexFromString } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
-import { DEFAULT_PROMPT } from './default-prompt.js';
+import { DEFAULT_PROMPT, DEFAULT_PROMPT_ANIMA, DEFAULT_PROMPT_KREA2, PROFILE_DEFAULT_PROMPTS } from './default-prompt.js';
+import { getTokenCountAsync } from '../../../tokenizers.js';
 
 // 扩展名称和路径
 const extensionName = 'st-image-auto-generation';
@@ -50,10 +51,72 @@ function escapeHtmlAttribute(value) {
         .replace(/>/g, '&gt;');
 }
 
+// ── Image profiles ──────────────────────────────────────────────────────────
+// Manual selector for which picture model the chat-completion preset writes
+// for. It changes what this extension injects and how it processes pic prompts;
+// it never touches the core Image Generation (sd) workflow, style or prefix.
+//   anima - Qwen3-0.6B encoder: tag clause + PIC_LOOK_SHORT rows, 1800-char cap
+//   krea2 - Qwen3-4B encoder: full PIC_LOOK rows, "no text" closer, 6000 cap
+// Neither profile carries an artist or style tag (no @xlvxp): qualityPrefix is
+// empty and off for both; style lives in the core Image Generation prefix.
+const PROFILE_NAMES = ['krea2', 'anima'];
+const PROFILE_DEFAULTS = {
+    anima: {
+        prompt: DEFAULT_PROMPT_ANIMA,
+        qualityPrefix: '',
+        qualityPrefixAuto: false,
+        resolutionProfile: 'hd_1mp',
+        noTextSuffix: false,
+        lookRow: 'short',
+        maxPromptChars: 1800,
+    },
+    krea2: {
+        prompt: DEFAULT_PROMPT_KREA2,
+        qualityPrefix: '',
+        qualityPrefixAuto: false,
+        resolutionProfile: 'krea_1_5mp',
+        noTextSuffix: true,
+        lookRow: 'full',
+        maxPromptChars: 6000,
+    },
+};
+function profileLabel(name) { return name === 'anima' ? 'Anima' : 'Krea2'; }
+function getProfileName() {
+    const p = String(extension_settings[extensionName]?.profile || '').toLowerCase();
+    return p === 'anima' ? 'anima' : 'krea2';
+}
+// Active profile merged over its defaults, so a missing sub-key falls back.
+function getActiveProfile() {
+    const name = getProfileName();
+    const stored = extension_settings[extensionName]?.profiles?.[name] || {};
+    return { name, ...PROFILE_DEFAULTS[name], ...stored };
+}
+function ensureProfiles(cfg) {
+    let changed = false;
+    if (!cfg.profiles || typeof cfg.profiles !== 'object') { cfg.profiles = {}; changed = true; }
+    for (const name of PROFILE_NAMES) {
+        if (!cfg.profiles[name] || typeof cfg.profiles[name] !== 'object') { cfg.profiles[name] = {}; changed = true; }
+        for (const [key, value] of Object.entries(PROFILE_DEFAULTS[name])) {
+            if (cfg.profiles[name][key] === undefined) { cfg.profiles[name][key] = value; changed = true; }
+        }
+    }
+    if (!PROFILE_NAMES.includes(cfg.profile)) { cfg.profile = 'krea2'; changed = true; }
+    return changed;
+}
+// promptInjection.prompt mirrors the active profile's template so older code
+// paths and the loader's sentinel checks keep reading one place.
+function mirrorActivePrompt(cfg) {
+    const name = PROFILE_NAMES.includes(cfg.profile) ? cfg.profile : 'krea2';
+    const prompt = cfg.profiles?.[name]?.prompt;
+    if (typeof prompt === 'string' && cfg.promptInjection) cfg.promptInjection.prompt = prompt;
+}
+
 // 默认设置
 const defaultSettings = {
+    profile: 'krea2',
+    profiles: JSON.parse(JSON.stringify(PROFILE_DEFAULTS)),
     insertType: INSERT_TYPE.DISABLED,
-    defaultType: 'square',
+    defaultType: 'portrait',
     resolutionPresets: {
         portrait:  { width: 512, height: 768 },
         landscape: { width: 768, height: 512 },
@@ -65,8 +128,8 @@ const defaultSettings = {
         enabled: true,
         prompt: DEFAULT_PROMPT,
         // Quote-aware regex that tolerates the SAME quote char embedded in the value.
-        // Two branches: prompt="..." (group 1) OR prompt='...' (group 2); the first
-        // non-empty capture wins downstream (see collectValidPicMatches).
+        // Four branches cover escaped/ordinary double and single quotes; the first
+        // non-empty capture wins downstream (see extractPromptFromPicMatch).
         //   - Older [^"']* truncated at the first apostrophe ("ETSVin's shirt" → "ETSVin").
         //   - Then [^"]* truncated at the first embedded double-quote: a height like
         //     5'3" closed the value early, so the rest of the prompt was DROPPED
@@ -75,11 +138,18 @@ const defaultSettings = {
         // closing quote ONLY when it is followed by the next attribute (name=) or the
         // tag end (lookahead). An interior 5'3" is followed by ` tall...`, not an
         // attribute/`>`, so it is NOT treated as the close — the full value survives.
+        // Accept normal tags (<pic ...>, <image ...>) and common malformed
+        // type-first tags (<closeup pic prompt="...">). SillyTavern may hide
+        // unknown empty tags while this extension misses them, so no render
+        // job starts unless all emitted shapes are parsed here.
         // The `i` flag is REQUIRED: models intermittently capitalize the tag
         // (<Pic prompt=...>), e.g. at sentence start. HTML tags are case-insensitive
         // so it renders/hides the same, but a case-sensitive /g regex silently
         // misses <Pic> → no image generated. Always keep the `i` flag.
-        regex: '/<pic\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
+        // Some models JSON-escape attribute delimiters in visible text and emit
+        // prompt=\"...\" type=\"scene\". Keep those literal backslashes in the
+        // match so REPLACE mode can still replace the exact original tag.
+        regex: String.raw`/<(?:(?:pic|image)|(?:(?:portrait|landscape|closeup|scene|square)(?=[^>]*\b(?:pic|image)\b)))\b[^>]*?\sprompt=(?:\\"([^>]*?)\\"|\\'([^>]*?)\\'|"([^>]*?)"|'([^>]*?)'|"([^>"]*?)(?=<\/(?:pic|image)>))(?=\s*(?:[\w-]+\s*=|\/?>|<\/(?:pic|image)>))[^>]*\/?>/gi`,
         position: 'deep_user', // legacy UI field; runtime forces user-role injection
         depth: 1, // 1 = one slot BEFORE the user's latest message, so the real
                   // user input stays the final-recency turn. depth 0 (absolute
@@ -94,12 +164,22 @@ const defaultSettings = {
     resolutionProfile: 'custom',
     // v1.5 quality + safety settings
     negativePrompt: 'duplicate, watermark, text, lowres, blurry, deformed hands, extra limbs, multiple heads, jpeg artifacts',
-    qualityPrefix: '@xlvxp, masterpiece, highly detailed, very aesthetic, cinematic lighting.',
-    qualityPrefixAuto: true,   // auto-prepend qualityPrefix if missing from the prompt
+    // Empty and off: "@xlvxp, masterpiece, very aesthetic" were Anima/booru
+    // tokens the Krea2 encoder cannot read. Style now lives in one place, the
+    // Image Generation "Common prompt prefix", which is visible in the UI.
+    qualityPrefix: '',
+    qualityPrefixAuto: false,  // auto-prepend qualityPrefix if missing from the prompt
     sanitizePrompts: true,     // strip SD weight syntax, negations, URLs, fancy quotes
     virDriftWarn: false,       // warn when a VIR character is named without appearance terms
     enableDedupe: true,        // same prompt+type twice in one reply → one gen, two embeds
-    allowFallbackTagInsertion: false,  // v6.0: OFF — let the AI count beats; no mechanical pic padding
+    // OFF by user decision: an invented pic is worse than no pic. A tagless
+    // reply is usually a truncated one, and a prompt synthesised from prose
+    // produced images that did not match the scene. No tag now means no image.
+    // The machinery below still works if this is switched back on: it only ever
+    // fires on a reply with zero pics, never pads a reply that has some, and
+    // never invents one for a greeting.
+    allowFallbackTagInsertion: false,
+    fallbackOnlyWhenZero: true,
     maxPicsPerMessage: 5,              // ceiling used only when fallback insertion is re-enabled
     loraTriggers: {},          // map<characterName, triggerString>; prepended when name found in prompt
     lastPicAudit: {},
@@ -141,6 +221,39 @@ const RESOLUTION_PROFILES = {
         closeup:   { width: 1280, height: 1536 },
         scene:     { width: 1920, height: 1024 },
         square:    { width: 1408, height: 1408 },
+    },
+    // Krea 2 profiles: the ratios Krea's API accepts (portrait 2:3, closeup 4:5,
+    // landscape 3:2, scene 16:9, square 1:1) at exact multiples of 16 px (the
+    // Krea 2 latent unit), so no side is rounded to a 64-px bucket and the scene
+    // frame is a true 16:9 instead of 15:8. Wider than 16:9 squashes full bodies
+    // (seed-1947 probe: 15:8 and 16:9 drew a shorter, stockier figure than 3:2).
+    krea_1mp: {
+        portrait:  { width: 832, height: 1248 },
+        landscape: { width: 1248, height: 832 },
+        closeup:   { width: 912, height: 1136 },
+        scene:     { width: 1360, height: 768 },
+        square:    { width: 1024, height: 1024 },
+    },
+    krea_1_5mp: {
+        portrait:  { width: 1024, height: 1536 },
+        landscape: { width: 1536, height: 1024 },
+        closeup:   { width: 1120, height: 1408 },
+        scene:     { width: 1680, height: 944 },
+        square:    { width: 1248, height: 1248 },
+    },
+    krea_2mp: {
+        portrait:  { width: 1184, height: 1776 },
+        landscape: { width: 1776, height: 1184 },
+        closeup:   { width: 1296, height: 1616 },
+        scene:     { width: 1936, height: 1088 },
+        square:    { width: 1440, height: 1440 },
+    },
+    krea_3mp: {
+        portrait:  { width: 1440, height: 2160 },
+        landscape: { width: 2160, height: 1440 },
+        closeup:   { width: 1584, height: 1984 },
+        scene:     { width: 2368, height: 1328 },
+        square:    { width: 1776, height: 1776 },
     },
 };
 
@@ -241,10 +354,20 @@ function getCharacterSDPrefix() {
 // prefix scan, otherwise dedupe of the prefix can miss because of (xxx:1.2)
 // noise interleaved with the prefix text.
 
-const NEG_WORD_RE = /\b(?:no|not|without|never|avoid|exactly|only)\b\s+[\w'’-]+(?:\s+[\w'’-]+){0,4}/gi;
+// True negations: drop the word and the whole phrase it negates, stopping at
+// punctuation or a conjunction ("no shoes and bare feet" keeps "and bare
+// feet"; "without a top and skirt pushed up" keeps the skirt). A two-word cap
+// left the noun behind: "no visible body hair" became "hair" and rendered it.
+const NEG_WORD_RE = /\b(?:no|not|without|never|avoid)\b(?:\s+(?!(?:and|but|with|while|or)\b)[\w'’-]+)*/gi;
+// Limiters, not negations: "wears only a white lace thong" must keep the thong.
+// These were once in NEG_WORD_RE, which deleted the garment along with the word.
+const LIMITER_WORD_RE = /\b(?:only|exactly|just)\s+/gi;
 const SD_WEIGHT_PAREN_RE = /\(([^()]*?):\s*-?\d+(?:\.\d+)?\s*\)/g;
 const SD_WEIGHT_BRACKET_RE = /\[([^\[\]]*?):\s*-?\d+(?:\.\d+)?\s*\]/g;
-const GEN_PARAM_RE = /\b(?:width|height|steps|seed|cfg|sampler|model|negative[_ ]?prompt|variant)\s*[:=]\s*\S+/gi;
+// "height", "width" and "model" are ordinary prompt words ("height: 170 cm",
+// "a fashion model") and were being deleted; only real generation parameters
+// are stripped now.
+const GEN_PARAM_RE = /\b(?:steps|seed|cfg|sampler|scheduler|negative[_ ]?prompt|variant)\s*[:=]\s*\S+/gi;
 
 function sanitizeForAnimaQwen(prompt) {
     const cfg = extension_settings[extensionName] || {};
@@ -261,42 +384,79 @@ function sanitizeForAnimaQwen(prompt) {
     // 4) Fancy quotes → straight; collapse straight doubles to singles
     text = text.replace(/[“”]/g, "'").replace(/"/g, "'");
     // 5) Negation phrases — Qwen paints the noun, so "no extra people" → extra people
+    text = text.replace(LIMITER_WORD_RE, '');
     const negMatches = text.match(NEG_WORD_RE);
     if (negMatches?.length) {
         debugLog(`[${extensionName}] sanitizer stripped ${negMatches.length} negation phrase(s):`, negMatches);
         text = text.replace(NEG_WORD_RE, ' ');
+        // A negated phrase after a connector left the connector dangling ("..., with no other
+        // person in frame." became "..., with."); drop the connector and the empty comma.
+        text = text.replace(/\s*,?\s+(?:with|and|but|or|while|plus)\s*(?=[.,;])/gi, '').replace(/,\s*(?=[.;])/g, '').replace(/(?:\s*,){2,}/g, ',');
     }
-    // 6) Standalone problem descriptors that cause artifacts
-    text = text.replace(/\b(duplicate|duplicates|multiple\s+heads|extra\s+\w+)\b/gi, ' ');
+    // 5b) Makeup wear words draw as injuries (smudged lipstick -> blood on the
+    //     chin, dark circles under smudged mascara -> a black eye). Keep the
+    //     colour, drop the wear; tears stay as tracks on the cheeks.
+    if (cfg.fixMakeupWords !== false) {
+        text = text
+            // a print left on someone stays a print
+            .replace(/\b(?:a\s+)?(?:faint\s+red\s+)?(?:lipstick|lip)\s+(?:print|mark|smear|smudge)s?\s+(?:on|across|at)\s+(his|her|their)\s+([\w-]+)/gi, 'a faint red lip print on $1 $2')
+            .replace(/\b(?:her|his|their)?\s*(?:[\w-]+\s+)?lipstick\s+(?:smeared|smudged|printed|pressed|left)\s+(?:across|on|onto|against|at)\s+(his|her|their)\s+([\w-]+)/gi, 'a faint red lip print on $1 $2')
+            // wear words on the wearer's own makeup: keep the colour word only
+            .replace(/\b((?:[\w-]+\s+){0,2}lipstick|lip ?gloss|lip ?stain)\s+(?:is\s+)?(?:smudged|smeared|stained|streaked|faded|worn off|bleeding|messy|ruined)(?:\s+(?:at|on|across|around|to|over|down)\s+[^,.;]*)?/gi, '$1')
+            .replace(/\b(?:smudged|smeared|streaked|running|ruined|messy|bleeding)\s+(lipstick|lip ?gloss|mascara|eyeliner|makeup|eye makeup)\b/gi, '$1')
+            .replace(/\b(lipstick|lip ?gloss|mascara|eyeliner|makeup)\s+(?:smudged|smeared|streaked|running|ruined|bleeding)(?:\s+(?:down|under|below|at|on|across|around)\s+[^,.;]*)?/gi, '$1')
+            // bruise-like words around the eyes
+            .replace(/\b(?:dark|purple|dark purple|deep|heavy|bruised|bruise-like)\s+(?:circles|shadows|rings)\s+(?:under|beneath|below)\s+(?:her|his|their|the|them|smudged\s+)?\s*(?:eyes?|lids|mascara|them)?\b/gi, 'tired eyes')
+            .replace(/\b(?:red|pink)-rimmed(?:\s+[\w-]+)?\s+eyes\b/gi, 'wet eyes');
+    }
+    // 6) Standalone problem descriptors that cause artifacts. "extra" is kept as
+    //    an ordinary word ("extra large breasts", "extra long hair"); only the
+    //    negative-prompt leaks about anatomy are removed.
+    text = text.replace(/\b(duplicate|duplicates|multiple\s+heads|extra\s+(?:limbs?|fingers?|digits?|heads?|arms?|legs?|hands?|feet|eyes|people|persons?))\b/gi, ' ');
+    // 6b) Field labels at a sentence start ("Style:", "Lighting:", "Expression:") are dropped: Krea 2's Qwen3-VL
+    //     encoder reads labels as text to draw (Comfy-Org template PR #1313), and the prose works the same without them.
+    text = text.replace(/\b(His|Her|Their)\s+expression:\s+/g, '$1 face shows ')
+               .replace(/(^|[.!?]\s+)(?:[A-Z][a-z]+(?:\s[a-z]+)?):\s+(?=[A-Za-z])/g, '$1');
     // 7) Whitespace / dangling punctuation cleanup
     text = text.replace(/\s+([.,;:!?])/g, '$1')
                .replace(/[.,;:]\s*([.,;:])/g, '$1')
                .replace(/\s+/g, ' ')
                .trim();
-    // 8) Length cap (Qwen tops out ~512 tokens — generous char cap leaves headroom)
-    if (text.length > 1800) {
-        const cut = text.lastIndexOf(' ', 1800);
-        text = (cut > 1500 ? text.slice(0, cut) : text.slice(0, 1800)).trim();
+    // 8) Runaway guard, per profile. Anima's small encoder stops reading long
+    //    prompts (1800); the Krea2 tokenizer is uncapped (comfy/text_encoders/
+    //    krea2.py → Qwen3VL, max_length 99999999), and cutting at 1800 was
+    //    dropping the last person's clothing and the room line (6000). Cut on a
+    //    sentence end so a runaway prompt never ends mid-description.
+    const MAX_PROMPT_CHARS = Number(getActiveProfile().maxPromptChars) || 6000;
+    if (text.length > MAX_PROMPT_CHARS) {
+        const head = text.slice(0, MAX_PROMPT_CHARS);
+        const sentenceEnd = head.lastIndexOf('. ');
+        const space = head.lastIndexOf(' ');
+        const cut = sentenceEnd > MAX_PROMPT_CHARS * 0.8 ? sentenceEnd + 1 : (space > 0 ? space : MAX_PROMPT_CHARS);
+        text = head.slice(0, cut).trim();
     }
     return text;
 }
 
 function ensureQualityPrefix(prompt) {
     const cfg = extension_settings[extensionName] || {};
-    if (!cfg.qualityPrefixAuto) return prompt;
-    const prefix = String(cfg.qualityPrefix || '').trim();
+    // Per profile; both bundled profiles keep this empty and off (no artist
+    // or style tag is ever added here), so this is a no-op unless the user
+    // sets a prefix in settings.json for a profile.
+    const prof = getActiveProfile();
+    const auto = prof.qualityPrefixAuto !== undefined ? prof.qualityPrefixAuto : cfg.qualityPrefixAuto;
+    if (!auto) return prompt;
+    const prefix = String((prof.qualityPrefix !== undefined ? prof.qualityPrefix : cfg.qualityPrefix) || '').trim();
     if (!prefix) return prompt;
-    // Primary path is now AI-authored: the prompt template instructs the model
-    // to write the leading artist tag (first token of the quality prefix, e.g.
-    // "@xlvxp") itself. If it already did, treat the prefix as handled and do
-    // NOT inject — code injection here is only a fallback for replies that omit
-    // the tag entirely.
+    // If the prompt already opens with the prefix's first token, treat the
+    // prefix as handled and do NOT inject; injection here is only a fallback
+    // for replies that omit a user-configured prefix entirely.
     const firstTok = prefix.split(',')[0].trim().toLowerCase();
     if (firstTok) {
         const headStart = String(prompt || '').replace(/^[\s"']+/, '').slice(0, firstTok.length + 2).toLowerCase();
         if (headStart.startsWith(firstTok)) return String(prompt || '').trim();
     }
-    // Cheap match: first ~80 chars contain the prefix verbatim or the @xlvxp tag
+    // Cheap match: first ~80 chars contain the prefix verbatim
     const head = String(prompt || '').slice(0, Math.max(prefix.length + 40, 120)).toLowerCase();
     const pfxLower = prefix.toLowerCase();
     if (head.includes(pfxLower)) return prompt;
@@ -352,6 +512,120 @@ async function warnVirDrift(prompt) {
 }
 
 // Compose the final SD prompt from the AI's raw prompt text.
+// FF4 look lock: the model paraphrased the stored identity row differently in
+// every picture and dropped words (the lipstick), and each rewording gave the
+// encoder a new face. Replace each "<Name> is <identity>" sentence with the
+// stored PIC_LOOK row, keeping the preset's crop filter (close-up: no body
+// words; rear view: no face words).
+const LOCK_BODY_RE = /\b(chest|breasts?|bust|hips?|belly|stomach|waist|thighs?|legs?|butt|ass|build|curvy|slim|athletic|petite|plump|heavyset|average|muscular|lean|wiry|hands?|feet|shoulders|torso|figure|frame|hourglass|physique|silhouette|(?:tall|short)(?!\s+(?:\w+\s+){0,3}(?:hair|bob|cut|fringe|bangs|beard|nails|lashes|braid|ponytail|curls|locks)))\b/i;
+// Fragments that belong to the head stay in a close-up even when they mention a body word
+// ("hair falling past her shoulders", "beard down to his chest").
+const LOCK_HEAD_RE = /\b(hair|bob|braids?|ponytail|bun|curls|bangs|fringe|locks|dreadlocks|afro|mohawk|beard|moustache|mustache|stubble|lashes|brows?|eyes?|lips?|nose|jaw|cheeks?|cheekbones|chin|face|ears?|horns?|lipstick|makeup|mascara|freckles|mole|scar|glasses)\b/i;
+const LOCK_FACE_RE = /\b(face|eyes?|brows?|lashes|lips?|teeth|nose|jaw|cheeks?|cheekbones|lipstick|makeup|mascara|freckles|mole|scar)\b/i;
+// Clothing, pose, expression and props that share the identity sentence
+// ("...short dark brown hair; he wears a grey t-shirt, a sly grin") are kept:
+// the lock replaces only the part before the first of these words.
+const LOCK_TAIL_RE = /;|\b(?:wearing|wears|dressed|clad|holds?|holding|grip\w*|carr(?:y|ies|ying)|clutch\w*|grin\w*|smil\w*|smirk\w*|frown\w*|scowl\w*|gaz\w*|glanc\w*|look\w*|star(?:e|es|ing)|flush\w*|blush\w*|parted|pressed|knitted|furrowed|raised|lifted|narrowed|widened|lowered|tilted|turned|leaning|leans|leant|stands?|standing|sits?|sitting|kneel\w*|lying|lies|rest\w*|tears?|sweat\w*)\b/i;
+const LOCK_KEEP_RE = /\b(wear\w*|dressed|clad|in an? |blouse|shirt|t-shirt|tee|top|sweater|jumper|hoodie|cardigan|jacket|blazer|tunic|camisole|tank|robe|kimono|coat|vest|uniform|dress|gown|skirt|trousers|pants|jeans|shorts|leggings|slacks|bra|panties|thong|lingerie|stockings|tights|socks|boots|heels|flats|sneakers|shoes|apron|scrubs|suit|towel|bikini|swimsuit|nightgown|pyjamas|pajamas|underwear|briefs|boxers|bodice|corset|cloak|cape|glasses|watch|ring|necklace|earrings|holds?|holding|grip\w*|carr(?:y|ies|ying)|clutch\w*|grin\w*|smil\w*|smirk\w*|frown\w*|scowl\w*|gaz\w*|glanc\w*|look\w*|star(?:e|es|ing)|flush\w*|blush\w*|parted|knitted|furrowed|narrowed|widened|tilted|turned|leaning|leans|stands?|standing|sits?|sitting|kneel\w*|lying|lies|rest\w*|tears?|sweat\w*|naked|nude|bare|topless)\b/i;
+const LOCK_POSE_PART_RE = /\b(hands?|arms?|fingers?|fingertips?|palms?|elbows?|knees?|feet|foot|head|face|eyes?|chin|mouth|lips|brows?|cheeks?|wrists?|shoulder)\b/i;
+const LOCK_IDENTITY_START_RE = /^(?:adult|young|human|elderly|mature|old|[a-z-]+\s+(?:woman|man|girl|boy|male|female|lady|gentleman)|(?:\w+\s+){0,2}(?:creature|dragon|fox|wolf|cat|dog|elf|orc|goblin|demon|angel|android|robot|slime|anthro|pokemon|pokémon))\b/i;
+function lockLookSentences(prompt, copies, opts = {}) {
+    let text = String(prompt || '');
+    if (!text || !copies || typeof copies !== 'object') return text;
+    // Which stored row replaces the identity sentence: the short row under the
+    // Anima profile, the full row under Krea2. Decided by the profile setting,
+    // not by sniffing the prompt for a rating word.
+    const useShort = String(opts.lookRow || getActiveProfile().lookRow) === 'short';
+    const head = text.split(/\.\s/)[0].toLowerCase();
+    const closeup = /\b(close-up|closeup|face from|from the brows|head and shoulders|face fills)\b/.test(head);
+    const rearAll = /\b(from behind|rear view|back to the camera|seen from behind|walking away from the camera)\b/.test(head)
+        && !/\b(three-quarter|over (?:her|his|their) shoulder|turned back|turns back|look(?:s|ing)? back|glanc\w* back|face turned|facing the camera)\b/.test(head);
+    const rearNames = new Set();
+    for (const m of text.matchAll(/\bfrom behind ([A-Z][\w'-]+)|\b([A-Z][\w'-]+)(?:'s)? back(?: is)? to the camera|\bshows ([A-Z][\w'-]+) from behind|\b([A-Z][\w'-]+) (?:walks|walking) away from the camera|\b([A-Z][\w'-]+)[^.;]{0,40}\bwith (?:her|his|their) back to the camera/g)) {
+        const n = m.slice(1).find(Boolean); if (n) rearNames.add(n.toLowerCase());
+    }
+    for (const c of Object.values(copies)) {
+        const name = String(c?.name || '').trim();
+        if (!name) continue;
+        const row = String((useShort && c.look_short) || c.look || '').trim();
+        if (!row) continue;
+        let frags = row.split(/\s*,\s*/).filter(Boolean);
+        // A row head "Nezuko Kamado from Demon Slayer" (full_name + source) replaces the bare name in the locked sentence.
+        let headText = '';
+        const nameRe = new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+        const fullName = String(c?.pic_identity || '').split(',')[0].trim();
+        if (frags[0] && frags[0].toLowerCase() === name.toLowerCase()) frags.shift();
+        // A row head longer than the bare name is the full name ("Merry Evangeline Cunningham") or
+        // full name + source ("Nezuko Kamado from Demon Slayer"); it replaces the bare name in the
+        // locked sentence. Without this the full name was pasted as a body word: "Merry is a Merry
+        // Evangeline Cunningham, human, adult woman".
+        else if (frags[0] && (nameRe.test(frags[0]) || (fullName && frags[0].toLowerCase() === fullName.toLowerCase()))) headText = frags.shift();
+        if (/^humans?$/i.test(frags[0] || '')) frags.shift();
+        if (closeup) frags = frags.filter(f => LOCK_HEAD_RE.test(f) || !LOCK_BODY_RE.test(f));
+        const rear = rearNames.size ? rearNames.has(name.toLowerCase()) : rearAll;
+        if (rear) frags = frags.filter(f => !LOCK_FACE_RE.test(f));
+        if (frags.length < 3) continue;
+        const body = frags.join(', ');
+        const article = /^[aeiou]/i.test(body) ? 'an' : 'a';
+        const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`\\b${esc}\\b((?:[^.]|\\.(?=\\d))*?\\bis\\s+)(?:an?\\s+)?([^.]*?)(?=\\.(?:\\s|$))`, 'gi');
+        for (const m of text.matchAll(re)) {
+            const span = m[2];
+            if (!LOCK_IDENTITY_START_RE.test(span.trim())) continue;
+            // Keep clothing, pose, expression and props that share the
+            // sentence; without this, "Rebecca is ...; she wears a blouse"
+            // lost the blouse and Krea drew her naked.
+            let keep = '';
+            const b = span.search(LOCK_TAIL_RE);
+            if (b >= 0) {
+                if (span[b] === ';') keep = span.slice(b);
+                else {
+                    const before = span.slice(0, b);
+                    const cut = Math.max(before.lastIndexOf(','), before.lastIndexOf(';'));
+                    keep = cut >= 0 ? span.slice(cut) : ', ' + span.slice(b);
+                }
+                // Drop tail fragments that are body rows (the stored row already has
+                // them); keep clothing, held objects, pose and face-cue fragments.
+                const parts = [...keep.matchAll(/([;,])\s*([^;,]+)/g)];
+                const kept = parts.filter(m => { const fr = m[2].trim(); return !LOCK_BODY_RE.test(fr) || LOCK_KEEP_RE.test(fr) || LOCK_POSE_PART_RE.test(fr); });
+                keep = kept.map(m => m[1] + ' ' + m[2].trim()).join('');
+            }
+            let mid = m[1].replace(/\s*\bis\s*$/i, '').trim();
+            // "Yor Briar from Spy x Family stands camera-left ...; Yor Briar from Spy x Family is":
+            // the clause before the last semicolon stays as written; only the head after it is
+            // rebuilt, and a mid that repeats the name or the head's remainder is trimmed, so the
+            // head is never glued twice ("Yor Briar from Spy x Family Briar from Spy x Family").
+            let pre = '';
+            const semi = mid.lastIndexOf(';');
+            if (semi >= 0) { pre = mid.slice(0, semi + 1) + ' '; mid = mid.slice(semi + 1).trim(); }
+            let headOut;
+            if (!headText || (pre && /^(?:he|she|they|it)$/i.test(mid))) headOut = name + m[1];
+            else {
+                if (nameRe.test(mid)) mid = mid.replace(nameRe, '').trim();
+                const rest = headText.replace(nameRe, '').trim();
+                if (rest && mid.toLowerCase().startsWith(rest.toLowerCase())) mid = mid.slice(rest.length).trim();
+                headOut = (pre ? name + ' ' + pre : '') + (mid ? headText + ' ' + mid + ' is ' : headText + ' is ');
+            }
+            text = text.slice(0, m.index) + headOut + article + ' ' + body + keep + text.slice(m.index + m[0].length);
+            break;
+        }
+    }
+    return text;
+}
+async function lockIdentityLook(prompt) {
+    if (typeof window.ff4VirGetPicCopies !== 'function') return prompt;
+    if (extension_settings[extensionName]?.lookLock === false) return prompt;
+    try {
+        const copies = await window.ff4VirGetPicCopies();
+        const out = lockLookSentences(prompt, copies, { lookRow: getActiveProfile().lookRow });
+        if (out !== prompt) debugLog('look lock rewrote identity sentence(s)');
+        return out;
+    } catch (err) {
+        debugLog('lockIdentityLook failed', err?.message);
+        return prompt;
+    }
+}
+
 function buildEffectivePrompt(rawPrompt) {
     let p = sanitizeForAnimaQwen(rawPrompt);
     p = ensureQualityPrefix(p);
@@ -359,14 +633,18 @@ function buildEffectivePrompt(rawPrompt) {
     p = normalizePromptPeopleCount(p);
     const charPrefix = getCharacterSDPrefix();
     if (charPrefix) {
-        // Don't double-prepend an artist/style tag that the quality prefix
-        // already placed at the head. The user's per-character SD prefix is
-        // often the same artist tag as qualityPrefix (e.g. "@xlvxp"), which
-        // would otherwise yield "@xlvxp, @xlvxp, masterpiece, ...".
+        // Don't double-prepend a per-character SD prefix that already sits
+        // at the head of the prompt (it may repeat a configured quality
+        // prefix), which would otherwise yield "prefix, prefix, ...".
         const head = p.slice(0, charPrefix.length + 4).toLowerCase();
         if (!head.startsWith(charPrefix.toLowerCase())) {
             p = `${charPrefix}, ${p}`;
         }
+    }
+    // Krea 2 profile: the official template's closing sentence, after the cleaner (whose negation
+    // stripping would remove it); only words the prompt quotes on purpose are meant to be drawn.
+    if (getActiveProfile().noTextSuffix && !/pure imagery only/i.test(p)) {
+        p = p.replace(/\s*$/, '') + ' Absolutely no text, no typography, no letters, no words, no numbers, no logos, no watermark, no captions, pure imagery only.';
     }
     return p;
 }
@@ -412,17 +690,23 @@ function normalizePromptPeopleCount(prompt) {
     );
 }
 
-// Extract the type attribute value from a full <pic ...> tag string
+// Extract the image type from a full tag string. Prefer type="...", but also
+// recover malformed type-first tags like <closeup pic prompt="...">.
 function extractImageType(tagString) {
     if (typeof tagString !== 'string') return null;
-    const m = tagString.match(/\btype=['"](\w+)['"]/i);
-    return m ? m[1].toLowerCase() : null;
+    const tagNameType = tagString.match(/^<\s*(portrait|landscape|closeup|scene|square)\b/i);
+    if (tagNameType) return tagNameType[1].toLowerCase();
+    const m = tagString.match(/\btype\s*=\s*\\?["'](\w+)\\?["']/i);
+    if (m) return m[1].toLowerCase();
+    const beforePrompt = tagString.split(/\sprompt=/i)[0] || '';
+    const bareType = beforePrompt.match(/\b(portrait|landscape|closeup|scene|square)\b/i);
+    return bareType ? bareType[1].toLowerCase() : null;
 }
 
 function normalizeImageType(imageType) {
     const settings = extension_settings[extensionName] || {};
     const presets = settings.resolutionPresets || defaultSettings.resolutionPresets;
-    const defaultType = settings.defaultType || 'square';
+    const defaultType = settings.defaultType || 'portrait';
     return imageType && presets[imageType] ? imageType : defaultType;
 }
 
@@ -461,9 +745,12 @@ function updateUI() {
             'checked',
             extension_settings[extensionName].promptInjection.enabled,
         );
-        $('#prompt_injection_text').val(
-            extension_settings[extensionName].promptInjection.prompt,
-        );
+        const activeProfile = getActiveProfile();
+        $('#image_generation_profile').val(activeProfile.name);
+        $('#prompt_injection_text').val(activeProfile.prompt || '');
+        $('#prompt_injection_profile_label').text(profileLabel(activeProfile.name));
+        refreshProfileHint();
+        refreshTokenInfo();
         $('#prompt_injection_regex').val(
             extension_settings[extensionName].promptInjection.regex,
         );
@@ -487,7 +774,7 @@ function updateUI() {
             }
         });
         $('#default_image_type').val(
-            extension_settings[extensionName].defaultType || 'square',
+            extension_settings[extensionName].defaultType || 'portrait',
         );
         $('#image_generation_queue_concurrency').val(
             extension_settings[extensionName].queueConcurrency || 1,
@@ -516,6 +803,54 @@ function updateUI() {
         // CHAT_CHANGED already triggers updateUI() so the checkbox reloads on chat switch.
         $('#image_generation_chat_disabled').prop('checked', isChatDisabled());
     }
+}
+
+// Hint under the profile select: the active chat-completion preset name and
+// the VIR extension's profile, with a warning colour when they disagree.
+function refreshProfileHint() {
+    const el = $('#image_generation_profile_hint');
+    if (!el.length) return;
+    const name = getProfileName();
+    const notes = [];
+    let presetName = '';
+    try { presetName = String(getContext()?.chatCompletionSettings?.preset_settings_openai || ''); } catch { /* ignore */ }
+    if (presetName) {
+        notes.push(`Active preset: ${presetName}.`);
+        const mine = name === 'anima' ? /anima/i : /krea/i;
+        const other = name === 'anima' ? /krea/i : /anima/i;
+        if (other.test(presetName) && !mine.test(presetName)) notes.push(`Preset name looks like ${profileLabel(name === 'anima' ? 'krea2' : 'anima')}; profile is ${profileLabel(name)}.`);
+    }
+    const virProfile = typeof window.ff4VirGetProfile === 'function' ? window.ff4VirGetProfile() : '';
+    if (virProfile && virProfile !== name) notes.push(`FF4 VIR is set to ${profileLabel(virProfile)}.`);
+    el.text(notes.join(' '));
+    el.css('color', notes.length > 1 ? 'var(--warning, #d7a900)' : '');
+}
+
+// "Injecting now" readout: the exact string refreshImagePromptInjection sends,
+// counted with ST's tokenizer (chars/3.8 if the tokenizer is unavailable).
+let tokenInfoTimer = null;
+async function refreshTokenInfo() {
+    const el = $('#image_generation_token_info');
+    if (!el.length) return;
+    const cfg = extension_settings[extensionName] || {};
+    const prof = getActiveProfile();
+    const text = String(prof.prompt || '');
+    const injecting = Boolean(cfg.promptInjection?.enabled) && cfg.insertType !== INSERT_TYPE.DISABLED && !isChatDisabled();
+    let tokens = 0;
+    try { tokens = text ? await getTokenCountAsync(text) : 0; } catch { tokens = Math.round(text.length / 3.8); }
+    const depth = Number(cfg.promptInjection?.depth);
+    const depthText = Number.isFinite(depth) && depth >= 1 ? depth : 1;
+    const why = !cfg.promptInjection?.enabled ? 'prompt injection OFF'
+        : cfg.insertType === INSERT_TYPE.DISABLED ? 'insert type Disabled'
+        : isChatDisabled() ? 'disabled for this chat' : '';
+    el.text(injecting
+        ? `Injecting now: ${tokens.toLocaleString()} tokens (${profileLabel(prof.name)} template, in-chat depth ${depthText}, user role).`
+        : `Injecting now: 0 tokens (${why}; the ${profileLabel(prof.name)} template would be ${tokens.toLocaleString()} tokens).`);
+    el.css('color', injecting ? 'var(--success, #6f6)' : '');
+}
+function scheduleTokenInfo() {
+    clearTimeout(tokenInfoTimer);
+    tokenInfoTimer = setTimeout(() => { refreshTokenInfo(); }, 300);
 }
 
 // 加载设置
@@ -569,11 +904,29 @@ async function loadSettings() {
             settingsChanged = true;
         }
 
+        // v9.0 one-time profile migration. The saved single template was the
+        // bundled Anima-era default (with mojibake dashes from an old save), so
+        // both profiles start from their bundled defaults rather than from it.
+        if (extension_settings[extensionName].profilesV1Applied !== true) {
+            const cfg = extension_settings[extensionName];
+            cfg.profiles = JSON.parse(JSON.stringify(PROFILE_DEFAULTS));
+            if (!PROFILE_NAMES.includes(cfg.profile)) cfg.profile = 'krea2';
+            if (/^krea_/.test(String(cfg.resolutionProfile || ''))) cfg.profiles.krea2.resolutionProfile = cfg.resolutionProfile;
+            mirrorActivePrompt(cfg);
+            cfg.profilesV1Applied = true;
+            settingsChanged = true;
+            console.log(`[${extensionName}] Applied v9.0 image profiles: profile=${cfg.profile}, templates reset to the bundled Anima/Krea2 defaults.`);
+        }
+        if (ensureProfiles(extension_settings[extensionName])) settingsChanged = true;
+
         // Auto-migrate previous bundled prompt contracts to the current
         // strengthened anchor-based version. This updates installs that still
-        // have an older default prompt saved in settings.json.
+        // have an older default prompt saved in settings.json. Each profile's
+        // template is checked on its own; the active one is mirrored into
+        // promptInjection.prompt afterwards.
+        for (const profileName of PROFILE_NAMES) {
         const currentPrompt = String(
-            extension_settings[extensionName].promptInjection.prompt || '',
+            extension_settings[extensionName].profiles[profileName].prompt || '',
         );
         const verbosePromptMarkers = [
             '[NAME-ONCE / CONTIGUOUS BLOCK / POSITION]',
@@ -620,13 +973,15 @@ async function loadSettings() {
             currentPrompt.includes(marker),
         ) && !currentPrompt.includes('[OVERRIDE PRECEDENCE - highest priority for this reply]');
         if (usesLegacyVerbosePrompt || usesOlderBundledPrompt || usesOutdatedCurrentBundledPrompt) {
-            extension_settings[extensionName].promptInjection.prompt =
-                defaultSettings.promptInjection.prompt;
+            extension_settings[extensionName].profiles[profileName].prompt =
+                PROFILE_DEFAULT_PROMPTS[profileName];
             settingsChanged = true;
             console.log(
-                `[${extensionName}] Auto-migrated older bundled Anima prompt to detailed VIR-driven contract.`,
+                `[${extensionName}] Auto-migrated older bundled ${profileLabel(profileName)} prompt to the current VIR-driven contract.`,
             );
         }
+        }
+        mirrorActivePrompt(extension_settings[extensionName]);
 
         // Auto-migrate broken/legacy pic-tag regexes to the current quote-aware default.
         // The OLD default used [^"']* which truncated prompts at the first apostrophe
@@ -643,6 +998,15 @@ async function loadSettings() {
             // value at the first embedded quote (a height like 5'3" dropped the
             // rest of the prompt). Upgrade to the lookahead-delimited version.
             '/<pic\\b[^>]*\\sprompt=(?:"([^"]*)"|\'([^\']*)\')[^>]*\\/?>/gi',
+            // Lookahead-delimited <pic>-only version. Upgrade so <image ...>
+            // tags emitted by weaker/smaller models still render.
+            '/<pic\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
+            // <pic>/<image> only version. Upgrade so malformed type-first tags
+            // like <closeup pic prompt="..."> still render.
+            '/<(?:pic|image)\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
+            // Normal-quote alias/type-first parser. Upgrade so literal
+            // backslash-escaped attributes (prompt=\"...\") also render.
+            '/<(?:(?:pic|image)|(?:(?:portrait|landscape|closeup|scene|square)(?=[^>]*\\b(?:pic|image)\\b)))\\b[^>]*?\\sprompt=(?:"([^>]*?)"|\'([^>]*?)\')(?=\\s*(?:[\\w-]+\\s*=|\\/?>))[^>]*\\/?>/gi',
         ];
         if (legacyPicRegexes.includes(extension_settings[extensionName].promptInjection.regex)) {
             extension_settings[extensionName].promptInjection.regex = defaultSettings.promptInjection.regex;
@@ -671,6 +1035,13 @@ async function loadSettings() {
             extension_settings[extensionName].defaultType = defaultSettings.defaultType;
             settingsChanged = true;
         }
+        // One-time: a tag without a type used to render square; people-first
+        // chats want the portrait frame instead.
+        if (extension_settings[extensionName].defaultTypeV2Applied !== true) {
+            if (extension_settings[extensionName].defaultType === 'square') extension_settings[extensionName].defaultType = 'portrait';
+            extension_settings[extensionName].defaultTypeV2Applied = true;
+            settingsChanged = true;
+        }
 
         // v6.0 one-time cadence migration: v4.0 had forced fallback insertion ON
         // (mechanical pic padding), which over-produced pics regardless of the
@@ -686,9 +1057,52 @@ async function loadSettings() {
             console.log(`[${extensionName}] Applied v6.0 beat-exact cadence: fallback insertion OFF (AI counts beats).`);
         }
 
+        // Krea2 one-time prefix migration. The Anima-era quality prefix
+        // ("@xlvxp, masterpiece, very aesthetic") is unreadable to the Krea2
+        // encoder, and the core Image Generation prefix forced portrait/macro
+        // framing onto every shot. Fixed here, on load, rather than only in
+        // settings.json: generation runs from the tab's in-memory settings, and
+        // an already-open tab autosaves its stale copy back over any file edit.
+        // A stale tab's save also drops this flag, so the next load re-applies.
+        if (extension_settings[extensionName].krea2PrefixApplied !== true) {
+            extension_settings[extensionName].qualityPrefix = '';
+            extension_settings[extensionName].qualityPrefixAuto = false;
+
+            const FRAMING = new Set(['intimate portrait photography', 'macro lens', 'shallow depth of field']);
+            const fixPrefix = (prefix) => {
+                const text = String(prefix || '');
+                if (!text.includes('{prompt}')) return text;
+                const parts = text.split(/,|\{prompt\}/).map(s => s.trim()).filter(Boolean);
+                if (!parts.some(p => FRAMING.has(p.toLowerCase()))) return text;
+                const style = parts.filter(p => !FRAMING.has(p.toLowerCase()));
+                if (!style.length) return '{prompt}';
+                const joined = style.join(', ');
+                // Style after {prompt}: the pic's own head line (rating, counts,
+                // act, camera, place) must lead, where the encoder reads hardest.
+                return `{prompt} ${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`;
+            };
+
+            const sd = extension_settings.sd;
+            if (sd) {
+                sd.prompt_prefix = fixPrefix(sd.prompt_prefix);
+                for (const style of Array.isArray(sd.styles) ? sd.styles : []) {
+                    style.prefix = fixPrefix(style.prefix);
+                }
+                // Core SD fills this textarea from settings at its own init; keep
+                // it in step so a later edit there cannot re-save the old text.
+                const box = document.getElementById('sd_prompt_prefix');
+                if (box) box.value = sd.prompt_prefix;
+            }
+
+            extension_settings[extensionName].krea2PrefixApplied = true;
+            settingsChanged = true;
+            console.log(`[${extensionName}] Applied Krea2 prefix migration: quality prefix off, portrait framing removed.`);
+        }
+
         for (const key of [
+            'profile',
             'queueConcurrency', 'generationDelayMs', 'skipStreamingPregeneration', 'debug', 'resolutionProfile',
-            'negativePrompt', 'qualityPrefix', 'qualityPrefixAuto', 'sanitizePrompts', 'virDriftWarn', 'enableDedupe', 'allowFallbackTagInsertion', 'maxPicsPerMessage', 'loraTriggers', 'lastPicAudit',
+            'negativePrompt', 'qualityPrefix', 'qualityPrefixAuto', 'sanitizePrompts', 'virDriftWarn', 'enableDedupe', 'allowFallbackTagInsertion', 'fallbackOnlyWhenZero', 'maxPicsPerMessage', 'loraTriggers', 'lastPicAudit',
         ]) {
             if (extension_settings[extensionName][key] === undefined) {
                 const def = defaultSettings[key];
@@ -731,13 +1145,36 @@ async function createSettings(settingsHtml) {
             $(this).prop('checked');
         saveSettingsDebounced();
         refreshImagePromptInjection();
+        refreshTokenInfo();
+    });
+
+    // Image profile select: switches the template, look row, no-text closer,
+    // prompt cap and this profile's remembered resolution preset.
+    $('#image_generation_profile').on('change', function () {
+        const cfg = extension_settings[extensionName];
+        const name = PROFILE_NAMES.includes($(this).val()) ? $(this).val() : 'krea2';
+        cfg.profile = name;
+        ensureProfiles(cfg);
+        mirrorActivePrompt(cfg);
+        const resName = cfg.profiles[name].resolutionProfile;
+        if (RESOLUTION_PROFILES[resName]) {
+            cfg.resolutionPresets = JSON.parse(JSON.stringify(RESOLUTION_PROFILES[resName]));
+            cfg.resolutionProfile = resName;
+        }
+        updateUI();
+        saveSettingsDebounced();
+        refreshImagePromptInjection();
+        toastr.info(`Image profile: ${profileLabel(name)}${RESOLUTION_PROFILES[resName] ? ` (resolution ${resName.replace(/_/g, ' ')})` : ''}.`);
     });
 
     $('#prompt_injection_text').on('input', function () {
-        extension_settings[extensionName].promptInjection.prompt =
-            $(this).val();
+        const cfg = extension_settings[extensionName];
+        ensureProfiles(cfg);
+        cfg.profiles[getProfileName()].prompt = $(this).val();
+        mirrorActivePrompt(cfg);
         saveSettingsDebounced();
         refreshImagePromptInjection();
+        scheduleTokenInfo();
     });
 
     $('#prompt_injection_regex').on('input', function () {
@@ -810,7 +1247,7 @@ async function createSettings(settingsHtml) {
         setChatDisabled(checked);
         // Re-evaluate injection state immediately so the rule blob is cleared/restored without
         // waiting for the next CHAT_CHANGED. Other chats are not touched.
-        try { refreshImagePromptInjection(); } catch { /* ignore */ }
+        try { refreshImagePromptInjection(); refreshTokenInfo(); } catch { /* ignore */ }
         toastr[checked ? 'warning' : 'info'](checked
             ? 'Image auto-generation DISABLED for this chat (pic injection + auto gen skipped).'
             : 'Image auto-generation re-enabled for this chat.');
@@ -854,11 +1291,16 @@ async function createSettings(settingsHtml) {
     });
 
     $('#image_generation_reset_prompt').on('click', function () {
-        extension_settings[extensionName].promptInjection.prompt = defaultSettings.promptInjection.prompt;
-        $('#prompt_injection_text').val(defaultSettings.promptInjection.prompt);
+        const cfg = extension_settings[extensionName];
+        ensureProfiles(cfg);
+        const name = getProfileName();
+        cfg.profiles[name].prompt = PROFILE_DEFAULT_PROMPTS[name];
+        mirrorActivePrompt(cfg);
+        $('#prompt_injection_text').val(cfg.profiles[name].prompt);
         saveSettingsDebounced();
         refreshImagePromptInjection();
-        toastr.info('Prompt template reset to default.');
+        refreshTokenInfo();
+        toastr.info(`${profileLabel(name)} prompt template reset to default.`);
     });
 
     $('#image_generation_test_regex').on('click', function () {
@@ -869,14 +1311,13 @@ async function createSettings(settingsHtml) {
             const sample = `Narration before. <pic prompt="masterpiece, a woman 5'3" tall, red cloak" type="portrait"> Narration after.`;
             const matches = regex.global ? [...sample.matchAll(regex)] : (sample.match(regex) ? [sample.match(regex)] : []);
             const m0 = matches?.[0];
-            // Quote-aware regex: group 1 (double-quoted) or group 2 (single-quoted).
-            const prompt = (m0?.[1] && m0[1].length) ? m0[1] : m0?.[2];
+            const prompt = extractPromptFromPicMatch(m0);
             if (prompt && /red cloak/.test(prompt)) {
                 toastr.success(`Regex works (kept the full value past 5'3"). Captured prompt: ${prompt}`);
             } else if (prompt) {
                 toastr.warning(`Regex truncated at an embedded quote — captured only: ${prompt}`);
             } else {
-                toastr.warning('Regex did not capture a prompt. Capture group 1 (or 2) must be the prompt text.');
+                toastr.warning('Regex did not capture a prompt. One prompt capture group must contain the value.');
             }
         } catch (error) {
             toastr.error(`Regex error: ${error}`);
@@ -889,6 +1330,9 @@ async function createSettings(settingsHtml) {
         if (!profile) return;
         extension_settings[extensionName].resolutionPresets = JSON.parse(JSON.stringify(profile));
         extension_settings[extensionName].resolutionProfile = profileName;
+        // Remembered per image profile, so switching profiles restores it.
+        ensureProfiles(extension_settings[extensionName]);
+        extension_settings[extensionName].profiles[getProfileName()].resolutionProfile = profileName;
         updateUI();
         saveSettingsDebounced();
         toastr.info(`Resolution profile applied: ${profileName.replace('_', ' ')}`);
@@ -1024,7 +1468,7 @@ function refreshImagePromptInjection() {
             setExtPrompt(LEGACY_PIC_PRIORITY_KEY, '', IMAGE_PROMPT_POSITION, 0);
             return;
         }
-        const prompt = cfg.promptInjection.prompt || '';
+        const prompt = getActiveProfile().prompt || cfg.promptInjection.prompt || '';
         // Force 'user' role so squash_system_messages can't merge-and-bury it.
         const role = extension_prompt_roles.USER;
         // Clear the retired reminder slot in case an earlier session injected it.
@@ -1056,9 +1500,9 @@ eventSource.on(event_types.GENERATION_ENDED, () => {
         // the auto-gen extension stored its prompt). Avoid counting markdown
         // image markers from earlier turns or character backgrounds.
         const hadInlinePrompt = !!(last.extra?.inlineImagePrompts && Object.keys(last.extra.inlineImagePrompts).length);
-        const visiblePicTag = /<pic\b[^>]*prompt=/i.test(mes);
+        const visiblePicTag = /<(?:(?:pic|image)|(?:(?:portrait|landscape|closeup|scene|square)(?=[^>]*\b(?:pic|image)\b)))\b[^>]*prompt=/i.test(mes);
         const visibleImageMd = /!\[generated image\]/i.test(mes);
-        const reasoningPicOnly = !visiblePicTag && !visibleImageMd && /<pic\b/i.test(reasoning);
+        const reasoningPicOnly = !visiblePicTag && !visibleImageMd && /<(?:(?:pic|image)|(?:(?:portrait|landscape|closeup|scene|square)(?=[^>]*\b(?:pic|image)\b)))\b/i.test(reasoning);
 
         const wordCount = mes.trim().split(/\s+/).length;
         const looksSubstantive = wordCount >= 60;
@@ -1100,6 +1544,8 @@ window.stImageAutoGenStatuses = window.stImageAutoGenStatuses || new Map();
 // people-count mismatches.
 window.stImageAutoGenBuildEffectivePrompt = buildEffectivePrompt;
 window.stImageAutoGenGetCharacterSDPrefix = getCharacterSDPrefix;
+window.stImageAutoGenGetProfile = getProfileName;
+window.stImageAutoGenLockLookSentences = lockLookSentences;
 // Sequential generation queue — prevents flooding ComfyUI with parallel requests
 // which causes model unload/reload thrashing
 window.stImageGenQueue = window.stImageGenQueue || [];
@@ -1145,7 +1591,7 @@ async function runQueuedGeneration({ key, prompt, insertType, imageType, resolve
             throw new Error('No image generation slash command is available');
         }
         const dims = resolveResolution(imageType);
-        const effectivePrompt = buildEffectivePrompt(prompt);
+        const effectivePrompt = buildEffectivePrompt(await lockIdentityLook(prompt));
         // Optional VIR drift warning (fire-and-forget, doesn't block the gen)
         warnVirDrift(effectivePrompt);
         const cfg = extension_settings[extensionName] || {};
@@ -1186,12 +1632,7 @@ function collectValidPicMatches(matches) {
     return (matches || [])
         .map((match, originalIndex) => {
             const originalTag = typeof match?.[0] === 'string' ? match[0] : '';
-            // Quote-aware regex has 2 capture groups: [1] for double-quoted,
-            // [2] for single-quoted. Whichever quote style was used yields a
-            // non-empty group; the other is undefined. Pick the populated one.
-            const prompt = (typeof match?.[1] === 'string' && match[1].length > 0) ? match[1]
-                         : (typeof match?.[2] === 'string') ? match[2]
-                         : '';
+            const prompt = extractPromptFromPicMatch(match);
             return { match, originalIndex, originalTag, prompt };
         })
         .filter(item => item.originalTag && normalizePromptKey(item.prompt));
@@ -1233,6 +1674,25 @@ function ensureGlobalRegex(regex) {
     if (regex.global) return regex;
     const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
     return new RegExp(regex.source, flags);
+}
+
+function extractPromptFromPicMatch(match) {
+    // Groups 1/2 are backslash-escaped double/single quotes; groups 3/4
+    // are ordinary double/single quotes. Return the populated branch.
+    // Group 5: unterminated value closed by </pic> instead of a quote.
+    for (let i = 1; i <= 5; i++) {
+        if (typeof match?.[i] === 'string' && match[i].length > 0) {
+            return match[i];
+        }
+    }
+    return '';
+}
+
+function getImageTagDetectionRegex() {
+    // Detection/generation must not depend on prompt injection being enabled.
+    // The user's preset can supply pic rules, while this internal parser still
+    // catches normal, alias, and type-first tags for rendering.
+    return ensureGlobalRegex(regexFromString(defaultSettings.promptInjection.regex));
 }
 
 function escapePromptAttributeValue(value) {
@@ -1331,6 +1791,13 @@ function inferRatingSentence(...texts) {
 function summarizeBeatText(text, maxLen = 220) {
     let value = String(text || '')
         .replace(/<[^>]+>/g, ' ')
+        // Markdown and the status header used to survive into the prompt, so
+        // the encoder was handed "**Friday | 11:52 PM | Etwin's Bedroom**" and
+        // tried to paint that text into the image.
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+        .replace(/^\s*\*\*[^\n*]*\|[^\n*]*\*\*\s*$/gm, ' ')
+        .replace(/[*_`#>]+/g, ' ')
+        .replace(/\s*\|\s*/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
     if (value.length > maxLen) {
@@ -1382,6 +1849,24 @@ function selectSceneAnchors(contextText) {
         selected.push(sentence);
     }
     return selected;
+}
+
+// Overlapping slices of the same prose were both reaching the prompt, so the
+// same sentence appeared twice. Exact-match dedupe missed it; compare content.
+function dedupeOverlapping(sentences) {
+    const kept = [];
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    for (const sentence of sentences) {
+        const n = norm(sentence);
+        if (!n) continue;
+        const head = n.slice(0, 40);
+        if (kept.some((k) => {
+            const kn = norm(k);
+            return kn.includes(n) || n.includes(kn) || (head && kn.startsWith(head));
+        })) continue;
+        kept.push(sentence);
+    }
+    return kept;
 }
 
 function buildActionFocusSentence(contextText, sceneAnchors) {
@@ -1460,10 +1945,20 @@ function pickActivePicCopyEntries(fullText, localText, allCopies) {
     // Prefer characters named in THIS beat's local context, so an auto-inserted
     // pic depicts the actor/speaker of that beat — not whoever else is named
     // elsewhere in the message (which caused wrong-character fallback pics).
-    const localNamed = entries.filter((entry) => entry?.name && local.includes(String(entry.name).toLowerCase()));
+    // Prose calls people by first name ("Nico"), while the VIR entry is the
+    // canonical one ("Nico Suzune"). Matching only the full name meant the beat's
+    // real subject was missed and the pic fell through to the pinned persona.
+    const named = (entry, haystack) => {
+        const name = String(entry?.name || '').toLowerCase();
+        if (!name) return false;
+        if (haystack.includes(name)) return true;
+        const first = name.split(/\s+/)[0];
+        return first.length >= 3 && new RegExp(`\\b${escapeRegExp(first)}\\b`).test(haystack);
+    };
+    const localNamed = entries.filter((entry) => named(entry, local));
     if (localNamed.length) return localNamed.slice(0, 3);
     // No name in the beat → use a SINGLE message-level subject, not the whole cast.
-    const fullNamed = entries.filter((entry) => entry?.name && full.includes(String(entry.name).toLowerCase()));
+    const fullNamed = entries.filter((entry) => named(entry, full));
     if (fullNamed.length) return fullNamed.slice(0, 1);
     const tiered = entries
         .filter((entry) => ['PIN', 'ACT'].includes(String(entry?.tier || '').toUpperCase()))
@@ -1477,6 +1972,11 @@ async function buildFallbackTagForBeat(chunk, fullText) {
     const allCopies = typeof window.ff4VirGetPicCopies === 'function'
         ? await window.ff4VirGetPicCopies()
         : {};
+    // The stored scene gives the rescue pic a room and the live stacking, so it
+    // is not generated in a void the way it was before.
+    const scene = typeof window.ff4VirGetScene === 'function'
+        ? await window.ff4VirGetScene().catch(() => null)
+        : null;
     const contextWindow = buildFallbackContextWindow(typeof chunk === 'string' ? null : chunk, fullText);
     // Attribute the inserted pic to the beat's own actor: detect names in the
     // beat plus its immediate context window, not the entire message.
@@ -1490,15 +1990,21 @@ async function buildFallbackTagForBeat(chunk, fullText) {
     const countSentence = names.length > 0
         ? `${names.length} ${names.length === 1 ? 'person is' : 'people are'} in the picture.`
         : '';
+    // Rate from the whole reply, not the ~420-char window: an explicit beat
+    // later in the message was being labelled "Safe for work."
     const promptBody = [
-        inferRatingSentence(combinedContext),
+        inferRatingSentence(combinedContext, fullText),
         countSentence,
-        ...sceneAnchors,
+        ...dedupeOverlapping(sceneAnchors),
         spatialLayout,
         'Keep each character\'s clothing, exposure level, underwear, accessories, and equipment exactly as currently described unless this exact visible moment explicitly changes them.',
         'Sexual action alone does not imply nudity or removed clothing for any other character.',
         ...activeEntries.map((entry) => humanizePicCopy(entry?.pic_copy)).filter(Boolean),
         actionFocus,
+        // Who is on top, then the room, last: the encoder weights the opening
+        // hardest and these are context rather than subject.
+        ...names.map((n) => scene?.stacks?.[n]).filter(Boolean).slice(0, 1).map((s) => `${s}.`),
+        scene?.setting ? `${scene.setting}.` : '',
     ].filter(Boolean).join(' ');
     const prompt = escapePromptAttributeValue(promptBody);
     return {
@@ -1513,25 +2019,36 @@ function upsertLastPicAudit(patch) {
     const current = cfg.lastPicAudit && typeof cfg.lastPicAudit === 'object'
         ? cfg.lastPicAudit
         : {};
+    // Only merge within one message. Merging across messages produced records
+    // that contradicted themselves — "fallbackInserted: true" from an earlier
+    // message sitting next to "fallbackDisabled: true" from this one — which
+    // makes the audit useless for working out what actually happened.
+    const sameMessage = patch?.messageId !== undefined && patch.messageId === current.messageId;
     cfg.lastPicAudit = {
-        ...current,
+        ...(sameMessage ? current : {}),
         ...patch,
         at: new Date().toISOString(),
     };
 }
 
-async function ensureInlinePicTags(messageId, message) {
+async function ensureInlinePicTags(messageId, message, { allowFallback = true } = {}) {
     const text = String(message?.mes || '');
     const cfg = extension_settings[extensionName] || {};
     if (!text.trim()) return { insertedCount: 0, expectedBeatCount: 0, visibleTagCount: 0, finalText: text };
 
-    const imgTagRegex = ensureGlobalRegex(regexFromString(cfg.promptInjection.regex));
+    const imgTagRegex = getImageTagDetectionRegex();
     const visibleMatches = collectValidPicMatches([...text.matchAll(imgTagRegex)]);
     const maskedText = maskRanges(text, [imgTagRegex, /<details[\s\S]*?<\/details>/gi]);
     const expectedBeatCount = Math.max(1, Math.min(cfg.maxPicsPerMessage || 4, detectExpectedBeatCount(maskedText)));
     const visibleTagCount = visibleMatches.length;
 
-    if (cfg.allowFallbackTagInsertion !== true) {
+    // Zero-only mode: never pad a reply that already illustrated some beats,
+    // only rescue one that illustrated none.
+    const zeroOnly = cfg.fallbackOnlyWhenZero !== false;
+    const fallbackAllowed = allowFallback
+        && cfg.allowFallbackTagInsertion === true
+        && (!zeroOnly || visibleTagCount === 0);
+    if (!fallbackAllowed) {
         upsertLastPicAudit({
             messageId,
             visibleTagCount,
@@ -1541,6 +2058,8 @@ async function ensureInlinePicTags(messageId, message) {
             insertedCount: 0,
             finalSlotInjection: true,
             fallbackDisabled: true,
+            zeroOnlySkip: zeroOnly && visibleTagCount > 0,
+            greetingSkip: !allowFallback,
             types: visibleMatches.map(({ originalTag }) => normalizeImageType(extractImageType(originalTag))),
         });
         return { insertedCount: 0, expectedBeatCount, visibleTagCount, finalText: text };
@@ -1561,9 +2080,12 @@ async function ensureInlinePicTags(messageId, message) {
     }
 
     const chunks = collectBeatChunks(maskedText);
-    const targetBeatCount = Math.max(1, Math.min(cfg.maxPicsPerMessage || 4, expectedBeatCount));
+    // One rescue pic in zero-only mode; the AI keeps deciding the real count.
+    const targetBeatCount = zeroOnly ? 1 : Math.max(1, Math.min(cfg.maxPicsPerMessage || 4, expectedBeatCount));
     const chosenChunks = chooseBeatChunks(chunks, targetBeatCount);
-    const missingCount = Math.max(0, Math.min((cfg.maxPicsPerMessage || 4) - visibleTagCount, targetBeatCount - visibleTagCount));
+    const missingCount = zeroOnly
+        ? 1
+        : Math.max(0, Math.min((cfg.maxPicsPerMessage || 4) - visibleTagCount, targetBeatCount - visibleTagCount));
     if (!chosenChunks.length || missingCount <= 0) {
         upsertLastPicAudit({
             messageId,
@@ -1611,7 +2133,7 @@ async function ensureInlinePicTags(messageId, message) {
 function hoistPicsFromThink(mes) {
     const text = String(mes || '');
     if (!/<think>/i.test(text) && !/<\/think>/i.test(text)) return text;
-    const picTag = /<pic\b[^>]*>/gi;
+    const picTag = /<(?:(?:pic|image)|(?:(?:portrait|landscape|closeup|scene|square)(?=[^>]*\b(?:pic|image)\b)))\b[^>]*>/gi;
     // Match a <think> block, OR a dangling reasoning run that ends at </think>
     // with no opening tag (the assistant-prefill case: prefill adds <think>,
     // so the model output starts mid-reasoning and only emits </think>).
@@ -1647,7 +2169,7 @@ function hoistPicsFromOpenThink(mes) {
     if (lower.indexOf('</think>', openIdx) !== -1) return text;
     const head = text.slice(0, openIdx);
     const tail = text.slice(openIdx);
-    const picTag = /<pic\b[^>]*>/gi;
+    const picTag = /<(?:(?:pic|image)|(?:(?:portrait|landscape|closeup|scene|square)(?=[^>]*\b(?:pic|image)\b)))\b[^>]*>/gi;
     const rescued = tail.match(picTag) || [];
     if (!rescued.length) return text;
     const tailWithoutPics = tail.replace(picTag, '');
@@ -1664,9 +2186,7 @@ eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
     const msgId = context.chat.length - 1;
     const message = context.chat[msgId];
     if (!message || message.is_user || msgId !== context.chat.length - 1) return;
-    if (!extension_settings[extensionName].promptInjection || !extension_settings[extensionName].promptInjection.regex) return;
-
-    const imgTagRegex = regexFromString(extension_settings[extensionName].promptInjection.regex);
+    const imgTagRegex = getImageTagDetectionRegex();
     let matches;
     // Closed-block hoist first, then rescue complete pics from a still-open
     // <think> tail so pre-gen starts the instant a tag is fully formed.
@@ -1706,7 +2226,54 @@ eventSource.on(event_types.STREAM_TOKEN_RECEIVED, async function () {
 
 // 监听消息接收事件负责清理漏网之鱼
 eventSource.on(event_types.MESSAGE_RECEIVED, handleIncomingMessage);
-async function handleIncomingMessage() {
+window.stImageAutoGenRecovery = window.stImageAutoGenRecovery || new Map();
+
+function scheduleLatestUnrenderedPicRecovery(reason = 'chat') {
+    setTimeout(async () => {
+        try {
+            if (
+                !extension_settings[extensionName] ||
+                extension_settings[extensionName].insertType === INSERT_TYPE.DISABLED ||
+                isChatDisabled()
+            ) {
+                return;
+            }
+            const context = getContext();
+            const messageId = context.chat.length - 1;
+            const message = context.chat[messageId];
+            if (!message || message.is_user) return;
+
+            const mes = String(message.mes || '');
+            const hasStoredPrompt = !!(message.extra?.inlineImagePrompts && Object.keys(message.extra.inlineImagePrompts).length);
+            const hasMarkdownImage = /!\[generated image\]/i.test(mes);
+            if (hasStoredPrompt || hasMarkdownImage) return;
+
+            const imgTagRegex = getImageTagDetectionRegex();
+            const cleanText = hoistPicsFromThink(mes).replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
+            const matches = collectValidPicMatches([...cleanText.matchAll(imgTagRegex)]);
+            if (!matches.length) return;
+
+            const recoveryKey = `${messageId}:${message.send_date || ''}:${mes.length}:${matches.length}`;
+            const lastTry = window.stImageAutoGenRecovery.get(recoveryKey) || 0;
+            if (Date.now() - lastTry < 30000) return;
+            window.stImageAutoGenRecovery.set(recoveryKey, Date.now());
+            console.info(`[${extensionName}] Recovering ${matches.length} unrendered pic tag(s) in latest message after ${reason}.`);
+            await handleIncomingMessage();
+        } catch (error) {
+            console.warn(`[${extensionName}] Latest unrendered pic recovery failed:`, error);
+        }
+    }, 800);
+}
+
+eventSource.on(event_types.APP_READY, () => scheduleLatestUnrenderedPicRecovery('app ready'));
+eventSource.on(event_types.CHAT_CHANGED, () => scheduleLatestUnrenderedPicRecovery('chat change'));
+eventSource.on(event_types.MESSAGE_SWIPED, () => scheduleLatestUnrenderedPicRecovery('swipe'));
+
+/**
+ * @param {number} [eventMessageId] Message id from MESSAGE_RECEIVED.
+ * @param {string} [eventType] SillyTavern passes 'first_message' for a greeting.
+ */
+async function handleIncomingMessage(eventMessageId, eventType) {
     // 确保设置对象存在
     if (
         !extension_settings[extensionName] ||
@@ -1735,16 +2302,13 @@ async function handleIncomingMessage() {
         message.mes = hoistedText;
     }
 
-    // 确保promptInjection对象和regex属性存在
-    if (
-        !extension_settings[extensionName].promptInjection ||
-        !extension_settings[extensionName].promptInjection.regex
-    ) {
-        console.error('Prompt injection settings not properly initialized');
-        return;
-    }
-
-    const fallbackResult = await ensureInlinePicTags(messageId, message);
+    // A greeting is static card text, not a narrated beat: ST fires
+    // MESSAGE_RECEIVED for it with type 'first_message' (script.js:7705). Its
+    // own pic tags still render, but never invent one for it — the rescue pic
+    // would be built from whatever VIR happens to exist and match nothing in
+    // the scene.
+    const isGreeting = eventType === 'first_message' || messageId === 0;
+    const fallbackResult = await ensureInlinePicTags(messageId, message, { allowFallback: !isGreeting });
     if (fallbackResult.insertedCount > 0 && fallbackResult.finalText) {
         message.mes = fallbackResult.finalText;
     }
@@ -1758,9 +2322,7 @@ async function handleIncomingMessage() {
     }
 
     // 使用正则表达式search
-    const imgTagRegex = regexFromString(
-        extension_settings[extensionName].promptInjection.regex,
-    );
+    const imgTagRegex = getImageTagDetectionRegex();
     // const testRegex = regexFromString(extension_settings[extensionName].promptInjection.regex);
     let matches;
     const cleanTextMain = message.mes.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
@@ -1832,7 +2394,7 @@ async function handleIncomingMessage() {
                         const dims = resolveResolution(imageType);
                         window.stImageAutoGenTracker.set(key, "pending");
                         setImageJobStatus(key, 'generating');
-                        const effectivePrompt = buildEffectivePrompt(prompt);
+                        const effectivePrompt = buildEffectivePrompt(await lockIdentityLook(prompt));
                         warnVirDrift(effectivePrompt);
                         const cfgFb = extension_settings[extensionName] || {};
                         const negativeFb = String(cfgFb.negativePrompt || '').trim();

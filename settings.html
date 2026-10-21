@@ -35,6 +35,18 @@
         <hr style="margin: 8px 0; opacity: 0.3;">
 
         <div class="flex-container flexnowrap">
+            <label for="image_generation_profile" class="flex1">Image Profile</label>
+            <select id="image_generation_profile" class="text_pole widthNatural margin0">
+                <option value="krea2">Krea2</option>
+                <option value="anima">Anima</option>
+            </select>
+        </div>
+        <div class="image-auto-help">
+            Manual: pick the picture model your chat-completion preset writes for. It does not follow the preset and never touches the Image Generation workflow, style or prefix. <b>Krea2</b>: full PIC_LOOK rows in the look lock, natural-English template, the "no text" closing sentence, 6000-char cap. <b>Anima</b>: PIC_LOOK_SHORT rows, tag-clause template, 1800-char cap. Each profile keeps its own prompt template and remembers its own resolution preset (switching applies it over the table below). No artist or style tag is ever added by this extension.
+            <div id="image_generation_profile_hint"></div>
+        </div>
+
+        <div class="flex-container flexnowrap">
             <label for="image_generation_insert_type" class="flex1" data-i18n="Image Insert Type">Image Insert Type</label>
             <select id="image_generation_insert_type" class="text_pole widthNatural margin0">
                 <option data-i18n="Insert In Current Message" value="inline">Insert In Current Message</option>
@@ -58,10 +70,11 @@
         </div>
 
         <div>
-            <div><label for="prompt_injection_text" class="flex1" data-i18n="Prompt Template">Prompt Template</label></div>
+            <div><label for="prompt_injection_text" class="flex1">Prompt Template (<span id="prompt_injection_profile_label">Krea2</span> profile)</label></div>
             <textarea id="prompt_injection_text" class="text_pole textarea_compact" rows="4" placeholder="Prompt that instructs the AI to generate image tags"></textarea>
+            <div id="image_generation_token_info" class="image-auto-help">Injecting now: --</div>
             <div class="image-auto-help">
-                When enabled, this full contract is injected as a final in-chat <code>user</code> prompt. It should explain when to emit visible inline &lt;pic&gt; tags, how to use VIR/PIC COPY, and which type names are allowed.
+                Edits the active profile's template; each profile has its own. When enabled, this full contract is injected as a final in-chat <code>user</code> prompt. It should explain when to emit visible inline &lt;pic&gt; tags, how to use the VIR PIC rows, and which type names are allowed. Reset restores the active profile's bundled default.
             </div>
             <div class="image-auto-button-row">
                 <button type="button" id="image_generation_reset_prompt" class="menu_button">Reset Prompt Template</button>
@@ -177,9 +190,9 @@
         <hr style="margin: 8px 0; opacity: 0.3;">
 
         <div style="margin-bottom: 4px;">
-            <label style="font-size: 0.9em; opacity: 0.8;">Resolution Presets <span style="opacity:0.6;">(manual values up to 2048 px per side)</span></label>
+            <label style="font-size: 0.9em; opacity: 0.8;">Resolution Presets <span style="opacity:0.6;">(manual values up to 4096 px per side, multiples of 16)</span></label>
             <div class="image-auto-help">
-                Width and height control image shape and VRAM use. Low VRAM through Quality are safer defaults; HD 1MP, Ultra 1.5MP, and Max 2MP are heavier templates for stronger GPUs/backends. Red pixel counts are above the 500k recommended budget but still allowed.
+                Width and height control image shape and VRAM use. Low VRAM through Quality are safer defaults; HD 1MP, Ultra 1.5MP, and Max 2MP are heavier templates for stronger GPUs/backends. Red pixel counts are above the 500k recommended budget but still allowed. The Krea rows use Krea 2's own ratios (2:3, 4:5, 3:2, 16:9, 1:1) at exact 16-px multiples; Krea 3MP is above the documented 2K range and costs about twice the time of 2MP.
             </div>
             <div class="image-auto-button-row">
                 <button type="button" class="menu_button image-generation-resolution-profile" data-profile="low_vram">Low VRAM</button>
@@ -188,6 +201,12 @@
                 <button type="button" class="menu_button image-generation-resolution-profile" data-profile="hd_1mp">HD 1MP</button>
                 <button type="button" class="menu_button image-generation-resolution-profile" data-profile="ultra_1_5mp">Ultra 1.5MP</button>
                 <button type="button" class="menu_button image-generation-resolution-profile" data-profile="max_2mp">Max 2MP</button>
+            </div>
+            <div class="image-auto-button-row">
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="krea_1mp">Krea 1MP</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="krea_1_5mp">Krea 1.5MP</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="krea_2mp">Krea 2MP</button>
+                <button type="button" class="menu_button image-generation-resolution-profile" data-profile="krea_3mp">Krea 3MP</button>
             </div>
             <table id="resolution_presets_table" style="width:100%; border-collapse:collapse; margin-top:4px; font-size:0.9em;">
                 <thead>
@@ -201,32 +220,32 @@
                 <tbody>
                     <tr data-type="portrait">
                         <td style="padding:2px 4px;">portrait</td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="768"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="4096" step="16" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="4096" step="16" style="width:70px;" value="768"></td>
                         <td style="padding:2px 4px;" class="preset-pixels">393,216</td>
                     </tr>
                     <tr data-type="landscape">
                         <td style="padding:2px 4px;">landscape</td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="768"></td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="4096" step="16" style="width:70px;" value="768"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="4096" step="16" style="width:70px;" value="512"></td>
                         <td style="padding:2px 4px;" class="preset-pixels">393,216</td>
                     </tr>
                     <tr data-type="closeup">
                         <td style="padding:2px 4px;">closeup</td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="640"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="4096" step="16" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="4096" step="16" style="width:70px;" value="640"></td>
                         <td style="padding:2px 4px;" class="preset-pixels">327,680</td>
                     </tr>
                     <tr data-type="scene">
                         <td style="padding:2px 4px;">scene</td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="768"></td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="448"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="4096" step="16" style="width:70px;" value="768"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="4096" step="16" style="width:70px;" value="448"></td>
                         <td style="padding:2px 4px;" class="preset-pixels">344,064</td>
                     </tr>
                     <tr data-type="square">
                         <td style="padding:2px 4px;">square</td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
-                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="2048" step="64" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-width" min="64" max="4096" step="16" style="width:70px;" value="512"></td>
+                        <td style="padding:2px 4px;"><input type="number" class="text_pole preset-height" min="64" max="4096" step="16" style="width:70px;" value="512"></td>
                         <td style="padding:2px 4px;" class="preset-pixels">262,144</td>
                     </tr>
                 </tbody>

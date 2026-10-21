@@ -88,6 +88,10 @@ Capture group 1 must be the image prompt.
 
 ## Settings
 
+**Image Profile**
+
+Manual selector for the picture model your chat-completion preset writes for: `Krea2` (default) or `Anima`. It does not follow the preset and never touches the Image Generation workflow, style or prefix. Each profile has its own prompt template, look-lock row (full `PIC_LOOK` for Krea2, `PIC_LOOK_SHORT` for Anima), prompt cap (6000 / 1800 chars), the Krea 2 "no text" closing sentence (Krea2 only) and its own remembered resolution preset. No artist or style tag is ever added by this extension. The **Injecting now** line under the template shows the exact token count of what is injected, or why nothing is.
+
 **Image Insert Type**
 
 - Replace mode is best for immersive inline roleplay because the image appears where the `<pic>` tag was.
@@ -100,7 +104,7 @@ Turns on a prompt instruction that tells the AI to write `<pic>` tags. Keep this
 
 **Prompt Template**
 
-The instruction inserted into model context when prompt injection is enabled.
+The instruction inserted into model context when prompt injection is enabled. The textarea edits the active profile's template; **Reset Prompt Template** restores that profile's bundled default.
 
 **Regex**
 
